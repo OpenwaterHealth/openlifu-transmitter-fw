@@ -140,7 +140,11 @@ uint16_t read_buffer_of_slave_global(uint8_t slave_addr, uint8_t* pBuffer, uint1
     if (HAL_I2C_Mem_Read(GLOBAL_I2C_DEVICE, (uint16_t)(slave_addr << 1),
                           0x00, I2C_MEMADD_SIZE_8BIT,
                           pBuffer, pkt_len, HAL_MAX_DELAY) != HAL_OK) {
-        Error_Handler();
+        /* Do not call Error_Handler — a slave that just received a DFU or
+         * RESET command may have rebooted before we issue this read.  Return
+         * 0 so the caller treats it as an empty response rather than hanging
+         * the master in Error_Handler until the IWDG fires. */
+        return 0;
     }
 
     return pkt_len;

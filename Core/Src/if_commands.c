@@ -153,12 +153,25 @@ static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t m
 		if(send_buffer_to_slave_global(slave_addr, send_buff, send_len) != 0) { // send buffer to slave
 			uartResp->packet_type = OW_ERROR;
 		}else{
-			/* USR_CFG write involves a flash erase+program cycle on the slave
-			 * which can take up to ~300 ms; give it enough time to finish. */
-			uint32_t wait_ms = (cmd->command == OW_CMD_USR_CFG && cmd->reserved == 1) ? 400U : 50U;
-			uint32_t _t0 = HAL_GetTick();
-			while ((HAL_GetTick() - _t0) < wait_ms) { /* wait for slave to process */ }
-			process_i2c_read_buffer(uartResp, cmd, module_id);
+			/* DFU and soft-reset commands cause the slave to reboot immediately
+			 * after processing.  Attempting an I2C readback on a resetting slave
+			 * would block in HAL_I2C_Mem_Read (HAL_MAX_DELAY) then call
+			 * Error_Handler, disabling IRQs and spinning until the IWDG fires
+			 * (~3.4 s) — which reboots the master.  Skip the readback and return
+			 * success: the slave has already accepted the command. */
+			if (cmd->command == OW_CMD_DFU || cmd->command == OW_CMD_RESET) {
+				uartResp->command  = cmd->command;
+				uartResp->addr     = cmd->addr;
+				uartResp->reserved = cmd->reserved;
+				uartResp->data_len = 0;
+			} else {
+				/* USR_CFG write involves a flash erase+program cycle on the slave
+				 * which can take up to ~300 ms; give it enough time to finish. */
+				uint32_t wait_ms = (cmd->command == OW_CMD_USR_CFG && cmd->reserved == 1) ? 400U : 50U;
+				uint32_t _t0 = HAL_GetTick();
+				while ((HAL_GetTick() - _t0) < wait_ms) { /* wait for slave to process */ }
+				process_i2c_read_buffer(uartResp, cmd, module_id);
+			}
 		}
 	}	
 }
