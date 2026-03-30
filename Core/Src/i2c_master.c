@@ -141,9 +141,31 @@ uint16_t read_buffer_of_slave_global(uint8_t slave_addr, uint8_t* pBuffer, uint1
                           0x00, I2C_MEMADD_SIZE_8BIT,
                           pBuffer, pkt_len, HAL_MAX_DELAY) != HAL_OK) {
         /* Do not call Error_Handler — a slave that just received a DFU or
-         * RESET command may have rebooted before we issue this read.  Return
-         * 0 so the caller treats it as an empty response rather than hanging
-         * the master in Error_Handler until the IWDG fires. */
+         * RESET command may have rebooted before we issue this read.
+         *
+         * However, returning 0 here can cause callers that blindly parse
+         * the buffer to underflow a length calculation (e.g., size =
+         * pkt_len - HEADER_SIZE when pkt_len == 0), leading to
+         * out-of-bounds reads. To mitigate this, if the provided buffer
+         * is large enough to hold a header, synthesize a minimal,
+         * self-consistent packet with a zero-length payload:
+         *   - pkt_len field set to HEADER_SIZE
+         *   - remaining header bytes cleared
+         * Callers that ignore errors will then see a valid header and a
+         * payload size of 0, avoiding underflow and hard faults.
+         */
+        if (max_len >= HEADER_SIZE) {
+            /* Set pkt_len in little-endian form. */
+            pBuffer[0] = (uint8_t)(HEADER_SIZE & 0xFFu);
+            pBuffer[1] = (uint8_t)((HEADER_SIZE >> 8) & 0xFFu);
+            /* Clear the rest of the header (if any). */
+            if (HEADER_SIZE > 2u) {
+                memset(&pBuffer[2], 0, (size_t)(HEADER_SIZE - 2u));
+            }
+            return HEADER_SIZE;
+        }
+
+        /* Buffer not large enough to hold even a header; signal failure. */
         return 0;
     }
 
