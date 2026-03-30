@@ -23,4 +23,4 @@
 }
 #endif
 
-#endif /* __PACKBURN_LOGGING_H*/
+#endif /* __LOGGING_H*/
