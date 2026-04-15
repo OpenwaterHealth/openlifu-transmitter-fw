@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#define COMMS_TIMEOUT 250
+
 static SPI_HandleTypeDef* spi_ = &hspi1;
 
 static const int READ_DIE1 = (1 << 1);
@@ -73,7 +75,7 @@ void TX7332_WriteReg(TX7332* device, uint16_t addr, uint32_t val) {
     HAL_GPIO_WritePin(device->cs_port, device->cs_pin, GPIO_PIN_RESET);
     WriteAddr(addr);
     val = SwapEndian(val);
-    HAL_SPI_Transmit(spi_, (uint8_t*)&val, 4, HAL_MAX_DELAY);
+    HAL_SPI_Transmit(spi_, (uint8_t*)&val, 4, COMMS_TIMEOUT);
     HAL_GPIO_WritePin(device->cs_port, device->cs_pin, GPIO_PIN_SET);
 }
 
@@ -84,14 +86,14 @@ uint32_t TX7332_ReadReg(TX7332* device, uint16_t addr) {
     TX7332_WriteReg(device, 0, READ_DIE1);
     HAL_GPIO_WritePin(device->cs_port, device->cs_pin, GPIO_PIN_RESET);
     WriteAddr(addr);
-    HAL_SPI_Receive(spi_, (uint8_t*)&read[0], 4, HAL_MAX_DELAY);
+    HAL_SPI_Receive(spi_, (uint8_t*)&read[0], 4, COMMS_TIMEOUT);
     HAL_GPIO_WritePin(device->cs_port, device->cs_pin, GPIO_PIN_SET);
 
     // Read chip 1
     TX7332_WriteReg(device, 0, READ_DIE2);
     HAL_GPIO_WritePin(device->cs_port, device->cs_pin, GPIO_PIN_RESET);
     WriteAddr(addr);
-    HAL_SPI_Receive(spi_, (uint8_t*)&read[1], 4, HAL_MAX_DELAY);
+    HAL_SPI_Receive(spi_, (uint8_t*)&read[1], 4, COMMS_TIMEOUT);
     HAL_GPIO_WritePin(device->cs_port, device->cs_pin, GPIO_PIN_SET);
 
     // Restore the original state
@@ -128,7 +130,7 @@ bool TX7332_WriteBulk(TX7332* device, uint16_t addr, uint32_t* pInts, int len) {
     for (int i = 0; i < len; ++i) {
     	uint32_t val = *(pInts + i);
         uint32_t swap_val = SwapEndian(val);
-        status = HAL_SPI_Transmit(spi_, (uint8_t*)&swap_val, 4, HAL_MAX_DELAY);
+        status = HAL_SPI_Transmit(spi_, (uint8_t*)&swap_val, 4, COMMS_TIMEOUT);
         if(status != HAL_OK){
         	break;
         }
