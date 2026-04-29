@@ -9,6 +9,7 @@
 #define INC_THERMISTOR_H_
 
 #include "main.h"  // Replace with your MCU HAL header
+#include <stdbool.h>
 
 // Define constants
 #define BETA 3380.0       // Beta coefficient of the thermistor
@@ -21,6 +22,7 @@ void Thermistor_Stop(void);
 float Thermistor_ReadTemperature(void);
 extern volatile float tx_temperature;
 extern volatile float ambient_temperature;
+extern volatile bool tx_overheat_flag;
 
 void TEMP_TIM7_IRQHandler(void);
 
