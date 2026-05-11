@@ -89,6 +89,8 @@ typedef enum {
 	OW_CMD_DFU = 0x0D,
 	OW_CMD_NOP = 0x0E,
 	OW_CMD_RESET = 0x0F,
+	OW_CMD_FLASH_WRITE = 0x10,
+	OW_CMD_FLASH_READ = 0x11,
 } UstxGlobalCommands;
 
 // Node operating mode reported in the OW_CMD_DISCOVERY response payload (data[0]).
@@ -113,6 +115,8 @@ typedef enum {
 	OW_CTRL_GET_MODULE_COUNT = 0x1A,
 	OW_CTRL_GET_MODULE_MODE  = 0x1B,  // Phase 2: return a module's NodeMode (app vs bootloader)
 	OW_CTRL_ENUMERATE        = 0x1C,  // Phase 2: re-run clear-config + discovery walk on demand
+	OW_CTRL_SET_PROFILE = 0x1B, // NEED TO CHANGE
+	OW_CTRL_GET_PROFILE = 0x1C, // NEED TO CHANGE
 } UstxControllerCommands;
 
 typedef enum {

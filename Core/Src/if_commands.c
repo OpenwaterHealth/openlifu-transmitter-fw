@@ -42,7 +42,14 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
+typedef struct {
+    uint8_t profile;
+    uint8_t num_pulses;
+} PulseProfile;
+
+static PulseProfile pulse_profiles[MAX_NUMBER_OF_PROFILES] = {0};
+
+static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
 
 static void print_uart_packet(const UartPacket* packet) {
@@ -59,7 +66,7 @@ static void print_uart_packet(const UartPacket* packet) {
 }
 
 
-static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id)
+static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id)
 {
 	uint16_t rx_len = 0;
 	uint8_t slave_addr = ModuleManager_GetModule(module_id)->i2c_address;
@@ -103,6 +110,7 @@ static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd,
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id)
 {
 	I2C_TX_Packet send_i2c_packet;
+	uint16_t send_len = 0;
 	uint8_t slave_addr = 0;
 	int local_tx_idx = 0;
 
@@ -152,7 +160,7 @@ static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t m
 		send_i2c_packet.data_len = cmd->data_len;
 		send_i2c_packet.pData = cmd->data;
 
-		uint16_t send_len = i2c_packet_toBuffer(&send_i2c_packet, send_buff);  // rebuild buffer
+		send_len = i2c_packet_toBuffer(&send_i2c_packet, send_buff);  // rebuild buffer
 
 		if(send_buffer_to_slave_global(slave_addr, send_buff, send_len) != 0) { // send buffer to slave
 			uartResp->packet_type = OW_ERROR;
@@ -703,6 +711,55 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 			uartResp->reserved = async_enabled?1:0;
 			uartResp->data_len = 0;
+			break;
+		case OW_CTRL_SET_PROFILE:
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+
+			uint8_t value = cmd->data[0];
+			if (value >= MAX_NUMBER_OF_PROFILES)
+			{
+					uartResp->packet_type = OW_ERROR;
+					return;
+			}
+
+			// stop_trigger_pulse();
+
+			// Clear values just in case
+			TX7332_WriteReg(&transmitters[cmd->addr], PROFILE_SELECT_REGISTER_G1, 0);
+			TX7332_WriteReg(&transmitters[cmd->addr], PROFILE_SELECT_REGISTER_G2, 0);
+
+			// Set profile values
+			TX7332_WriteReg(&transmitters[cmd->addr], PROFILE_SELECT_REGISTER_G1, value & PROFILE_SELECT_MASK);
+			TX7332_WriteReg(&transmitters[cmd->addr], PROFILE_SELECT_REGISTER_G2, value & PROFILE_SELECT_MASK);
+
+			// Load the profile into memory on the chip, this is a self-clearing bit
+			// not needed for setting profile just writing profiles to memory??
+			TX7332_WriteReg(&transmitters[cmd->addr], 0x00, 0x0008); //load prof
+
+			// start_trigger_pulse();
+			break;
+		case OW_CTRL_GET_PROFILE:
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 1;
+
+			uint32_t profile;
+			uint32_t profile_g1 = TX7332_ReadReg(&transmitters[cmd->addr], PROFILE_SELECT_REGISTER_G1);
+			uint32_t profile_g2 = TX7332_ReadReg(&transmitters[cmd->addr], PROFILE_SELECT_REGISTER_G2);
+
+			if (profile_g1 != profile_g2){
+					// Something went wrong, both registers should match
+					uartResp->packet_type = OW_ERROR;
+					return;
+			}
+
+			profile = profile_g1 & PROFILE_SELECT_MASK; // only bits 0-5 used (6 total bits)
+
+			uartResp->data = (uint8_t *)&profile;
 			break;
 		default:
 			uartResp->addr = 0;
