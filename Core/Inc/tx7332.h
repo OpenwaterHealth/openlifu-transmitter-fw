@@ -25,7 +25,7 @@ bool TX7332_WriteBulk(TX7332* device, uint16_t addr, uint32_t* pInts, int len);
 bool TX7332_WriteBulkVerify(TX7332* device, uint16_t addr, uint32_t* be_bytes, int len);
 
 void TX7332_SetRepeat(TX7332* device, int count);
-void TX7332_LoadProfile();
+void TX7332_LoadProfile(TX7332* device);
 
 #ifdef __cplusplus
 }

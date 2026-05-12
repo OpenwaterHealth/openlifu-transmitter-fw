@@ -42,12 +42,57 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-typedef struct {
-    uint8_t profile;
-    uint8_t num_pulses;
-} PulseProfile;
+// Profile 1 starts at 0x20, each pattern profile is 16 registers, each delay profile is 4 registers
+#define TX7332_DELAY_DATA_START      0x20U
+#define TX7332_DELAY_DATA_END        0x11FU
+#define TX7332_PATTERN_DATA_START    0x120U
+#define TX7332_PATTERN_DATA_END      0x19FU
+#define TX7332_DELAY_PROFILE_OFFSET  16U
+#define TX7332_PATTERN_PROFILE_OFFSET 4U
 
-static PulseProfile pulse_profiles[MAX_NUMBER_OF_PROFILES] = {0};
+typedef struct {
+	uint16_t delay_profiles_mask;
+	uint32_t pattern_profiles_mask;
+	uint8_t delay_profile_count;
+	uint8_t pattern_profile_count;
+} TxProfileCache;
+
+typedef struct {
+	uint8_t delay_profile_count;
+	uint8_t pattern_profile_count;
+	uint16_t delay_profiles_mask;
+	uint32_t pattern_profiles_mask;
+} TxProfileStatus;
+
+static TxProfileCache tx_profile_cache[TX_PER_MODULE] = {0};
+static TxProfileStatus tx_profile_status = {0};
+
+static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_addr, uint8_t reg_count)
+{
+	if (tx_idx >= TX_PER_MODULE || reg_count == 0U) {
+		return;
+	}
+
+	TxProfileCache *cache = &tx_profile_cache[tx_idx];
+	for (uint16_t i = 0; i < (uint16_t)reg_count; i++) {
+		uint16_t addr = (uint16_t)(start_addr + i);
+
+		if (addr >= TX7332_DELAY_DATA_START && addr <= TX7332_DELAY_DATA_END) {
+			uint8_t delay_profile = (uint8_t)(((addr - TX7332_DELAY_DATA_START) / TX7332_DELAY_PROFILE_OFFSET) + 1U);
+			if (delay_profile >= 1U && delay_profile <= MAX_NUMBER_OF_PROFILES) {
+				cache->delay_profiles_mask |= (uint16_t)(1U << (delay_profile - 1U));
+			}
+		} else if (addr >= TX7332_PATTERN_DATA_START && addr <= TX7332_PATTERN_DATA_END) {
+			uint8_t pattern_profile = (uint8_t)(((addr - TX7332_PATTERN_DATA_START) / TX7332_PATTERN_PROFILE_OFFSET) + 1U);
+			if (pattern_profile >= 1U && pattern_profile <= 32U) {
+				cache->pattern_profiles_mask |= (uint32_t)(1UL << (pattern_profile - 1U));
+			}
+		}
+	}
+
+	cache->delay_profile_count = __builtin_popcount(cache->delay_profiles_mask);
+	cache->pattern_profile_count = __builtin_popcount(cache->pattern_profiles_mask);
+}
 
 static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
@@ -831,6 +876,7 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			reg_value = cmd->data[2] | (cmd->data[3] << 8) | (cmd->data[4] << 16) | (cmd->data[5] << 24);
 
 			TX7332_WriteReg(&transmitters[cmd->addr], reg_address, reg_value);
+			cache_profiles_from_register_range(cmd->addr, reg_address, 1U);
 		}
 		else
 		{
@@ -905,6 +951,7 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}
+			cache_profiles_from_register_range(cmd->addr, reg_address, (uint8_t)reg_count);
 		}else{
 			process_i2c_forward(uartResp, cmd, module_id);
 		}
@@ -933,6 +980,8 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			if(!TX7332_WriteVerify(&transmitters[cmd->addr], reg_address, reg_value))
 			{
 				uartResp->packet_type = OW_ERROR;
+			} else {
+				cache_profiles_from_register_range(cmd->addr, reg_address, 1U);
 			}
 		}else{
 			process_i2c_forward(uartResp, cmd, module_id);
@@ -975,7 +1024,31 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}
+			cache_profiles_from_register_range(cmd->addr, reg_address, (uint8_t)reg_count);
 		}else{
+			process_i2c_forward(uartResp, cmd, module_id);
+		}
+		break;
+	case OW_TX7332_STATUS:
+		uartResp->command = OW_TX7332_STATUS;
+		uartResp->addr = cmd->addr;
+		uartResp->reserved = 0;
+		uartResp->data_len = 0;
+		uartResp->data = NULL;
+		if (cmd->addr >= get_tx_chip_count()) {
+			uartResp->packet_type = OW_ERROR;
+			break;
+		}
+
+		module_id = ModuleManager_GetModuleIndex(cmd->addr);
+		if (module_id == 0x00) {
+			tx_profile_status.delay_profile_count = tx_profile_cache[cmd->addr].delay_profile_count;
+			tx_profile_status.pattern_profile_count = tx_profile_cache[cmd->addr].pattern_profile_count;
+			tx_profile_status.delay_profiles_mask = tx_profile_cache[cmd->addr].delay_profiles_mask;
+			tx_profile_status.pattern_profiles_mask = tx_profile_cache[cmd->addr].pattern_profiles_mask;
+			uartResp->data_len = (uint16_t)sizeof(tx_profile_status);
+			uartResp->data = (uint8_t *)&tx_profile_status;
+		} else {
 			process_i2c_forward(uartResp, cmd, module_id);
 		}
 		break;
