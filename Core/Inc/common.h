@@ -117,6 +117,7 @@ typedef enum {
 	OW_CTRL_ENUMERATE        = 0x1C,  // Phase 2: re-run clear-config + discovery walk on demand
 	OW_CTRL_SET_PROFILE = 0x1B, // NEED TO CHANGE
 	OW_CTRL_GET_PROFILE = 0x1C, // NEED TO CHANGE
+	OW_CTRL_SET_PROFILE_CYCLE = 0x1D,
 } UstxControllerCommands;
 
 typedef enum {
