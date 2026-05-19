@@ -22,6 +22,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#define COMMS_TIMEOUT 250
+
 extern bool _enter_dfu;
 extern bool _force_stm32_dfu; // for testing purposes, forces to enter STM32 system bootloader instead of custom DFU mode
 
@@ -155,7 +157,7 @@ static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t m
 		}else{
 			/* DFU and soft-reset commands cause the slave to reboot immediately
 			 * after processing.  Attempting an I2C readback on a resetting slave
-			 * would block in HAL_I2C_Mem_Read (HAL_MAX_DELAY) then call
+			 * would block in HAL_I2C_Mem_Read (COMMS_TIMEOUT) then call
 			 * Error_Handler, disabling IRQs and spinning until the IWDG fires
 			 * (~3.4 s) — which reboots the master.  Skip the readback and return
 			 * success: the slave has already accepted the command. */
@@ -258,6 +260,8 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
         case OW_CMD_USR_CFG:
             // reserved == 0: READ
             // reserved == 1: WRITE (cmd->data is JSON text)
+			uartResp->id = cmd->id;
+			uartResp->command = OW_CMD_USR_CFG;
             if (cmd->reserved == 0) {
                 const uint8_t *wire_buf = NULL;
                 uint16_t wire_len = 0;
@@ -307,9 +311,10 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
             }
             break;
 		case OW_CMD_RESET:
+			uartResp->id = cmd->id;
+			uartResp->command = OW_CMD_RESET;
 			module_id = ModuleManager_GetModuleIndex(cmd->addr);
 			if (module_id == 0x00){
-				uartResp->command = cmd->command;
 				uartResp->addr = cmd->addr;
 				uartResp->reserved = cmd->reserved;
 				uartResp->data_len = 0;
@@ -325,9 +330,10 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 			}
 			break;
 		case OW_CMD_DFU:
+			uartResp->id = cmd->id;
+			uartResp->command = OW_CMD_DFU;
 			module_id = ModuleManager_GetModuleIndex(cmd->addr);
 			if (module_id == 0x00){
-				uartResp->command = cmd->command;
 				uartResp->addr = cmd->addr;
 				uartResp->reserved = cmd->reserved;
 				uartResp->data_len = 0;
@@ -455,7 +461,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			if(start_trigger_pulse() != TRIGGER_STATUS_RUNNING)
+			if(tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING)
 			{
 				uartResp->packet_type = OW_ERROR;
 			}

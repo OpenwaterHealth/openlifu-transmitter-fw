@@ -110,10 +110,10 @@ static HAL_StatusTypeDef lifu_cfg_writeback(void)
         return st;
     }
 
-    // Program entire struct word-by-word
+    // Program entire struct (full 2048 bytes)
     st = Flash_Write(LIFU_CFG_PAGE_ADDR,
-                     (uint32_t *)&g_cfg,
-                     (uint32_t)(sizeof(lifu_cfg_t) / sizeof(uint32_t)));
+                     &g_cfg,
+                     sizeof(lifu_cfg_t));
 
     return st;
 }
@@ -122,8 +122,8 @@ static HAL_StatusTypeDef lifu_cfg_writeback(void)
 static void lifu_cfg_load_raw(void)
 {
     Flash_Read(LIFU_CFG_PAGE_ADDR,
-               (uint32_t *)&g_cfg,
-               (uint32_t)(sizeof(lifu_cfg_t) / sizeof(uint32_t)));
+               &g_cfg,
+               sizeof(lifu_cfg_t));
 }
 
 // Ensure g_cfg is initialized and valid

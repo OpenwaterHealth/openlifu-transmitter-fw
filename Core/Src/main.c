@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <math.h>
 
 /* USER CODE END Includes */
 
@@ -55,6 +56,11 @@
 #define TOGGLE_INTERVAL 500       // Toggle every 500ms
 #define TEMPERATURE_INTERVAL 1000 // Toggle every 1000ms
 #define DEBOUNCE_DELAY_MS 10
+
+#define TX_OVERHEAT_TRIP_POINT   75.0f  // °C — trip threshold
+#define TX_OVERHEAT_HYSTERESIS    5.0f  // °C — must not exceed TX_OVERHEAT_TRIP_POINT
+_Static_assert(TX_OVERHEAT_HYSTERESIS <= TX_OVERHEAT_TRIP_POINT,
+               "TX_OVERHEAT_HYSTERESIS must not exceed TX_OVERHEAT_TRIP_POINT");
 
 #define BL_BKP_SIGNATURE (0x4F57424CU)     /* 'OWBL' */
 #define BL_BKP_REQ_DFU_MAGIC (0x21554644U) /* 'DFU!' */
@@ -153,6 +159,7 @@ I2C_HandleTypeDef *LOCAL_I2C_DEVICE = NULL;
 volatile bool _enter_dfu = false;
 volatile bool _force_stm32_dfu = false; // for testing purposes, forces to enter STM32 system bootloader instead of custom DFU mode
 volatile bool _usb_interrupt_flag = false;
+volatile bool tx_overheat_flag = false;
 TX7332 transmitters[TX_PER_MODULE];
 
 static lifu_cfg_t *cfg;
@@ -647,9 +654,36 @@ int main(void)
 
     if ((current_time - last_temp_toggle_time) >= TEMPERATURE_INTERVAL)
     {
-      tx_temperature = Thermistor_ReadTemperature();
+      float new_tx_temp = Thermistor_ReadTemperature();
       ambient_temperature = MAX31875_ReadTemperature();
       last_temp_toggle_time = current_time; // Update the last toggle time
+
+      /* Reject invalid readings (NaN or out-of-physical-range); retain last valid state */
+      if (!isnan(new_tx_temp) && (new_tx_temp > -50.0f) && (new_tx_temp < 150.0f))
+      {
+        tx_temperature = new_tx_temp;
+      }
+
+      /* Overheat detection with hysteresis */
+      if (!tx_overheat_flag)
+      {
+        if (tx_temperature >= TX_OVERHEAT_TRIP_POINT)
+        {
+          tx_overheat_flag = true;
+          if(get_trigger_status() == TRIGGER_STATUS_RUNNING) {
+            stop_trigger_pulse();
+            // send update
+            
+          }
+        }
+      }
+      else
+      {
+        if (tx_temperature <= (TX_OVERHEAT_TRIP_POINT - TX_OVERHEAT_HYSTERESIS))
+        {
+          tx_overheat_flag = false;
+        }
+      }
     }
   }
   /* USER CODE END 3 */
