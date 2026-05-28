@@ -461,7 +461,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			if(tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING)
+			if(!tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING)
 			{
 				uartResp->packet_type = OW_ERROR;
 			}
