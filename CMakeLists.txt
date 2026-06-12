@@ -109,6 +109,7 @@ option(DEBUG_ENABLED "Enable DMA-backed UART debug logging" OFF)
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    USB_DEVICE/App/usb_events.c
     Core/Src/lifu_config.c
     Core/Src/afe_config.c
     Core/Src/flash_eeprom.c
