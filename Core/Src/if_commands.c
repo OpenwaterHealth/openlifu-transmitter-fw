@@ -42,12 +42,36 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+#define MAX_PROFILES 16
+#define NUM_CHANNELS 64
+#define TX_APOD_CHANNELS_PER_CHIP 32U
+#define TX7332_APODIZATION_REGISTER 0x1BU
+
+static const uint8_t apodization_channel_order_reversed[TX_APOD_CHANNELS_PER_CHIP] = {
+	16U, 14U, 12U, 10U, 8U, 6U, 4U, 2U,
+	15U, 13U, 11U, 9U, 7U, 5U, 3U, 1U,
+	32U, 30U, 28U, 26U, 24U, 22U, 20U, 18U,
+	31U, 29U, 27U, 25U, 23U, 21U, 19U, 17U
+};
+
+// Match SDK packing: lsb is the index of channel number in APODIZATION_CHANNEL_ORDER_REVERSED.
+static uint8_t apodization_lsb_for_channel(uint8_t channel_1based)
+{
+	for (uint8_t lsb = 0U; lsb < TX_APOD_CHANNELS_PER_CHIP; lsb++) {
+		if (apodization_channel_order_reversed[lsb] == channel_1based) {
+			return lsb;
+		}
+	}
+
+	return 0U;
+}
+
 // Delay profile RAM starts at 0x20 (16 regs/profile), pattern RAM starts at 0x120 (4 regs/profile).
-#define TX7332_DELAY_DATA_START      0x20U
-#define TX7332_DELAY_DATA_END        0x11FU
-#define TX7332_PATTERN_DATA_START    0x120U
-#define TX7332_PATTERN_DATA_END      0x19FU
-#define TX7332_DELAY_PROFILE_OFFSET  16U
+#define TX7332_DELAY_DATA_START       0x20U
+#define TX7332_DELAY_DATA_END         0x11FU
+#define TX7332_PATTERN_DATA_START     0x120U
+#define TX7332_PATTERN_DATA_END       0x19FU
+#define TX7332_DELAY_PROFILE_OFFSET   16U
 #define TX7332_PATTERN_PROFILE_OFFSET 4U
 
 typedef struct {
@@ -65,16 +89,19 @@ typedef struct {
 } TxProfileStatus;
 
 // ========== GROUPED PROFILE PACKAGE SYSTEM ==========
-// Stores execution_order and apodization data for multi-profile auto-cycling
+// Stores execution_order and apodization data for multi-profile auto-cycling.
 typedef struct {
 	uint8_t profile_count;              // Number of configured profiles (1-16)
 	uint8_t apod_channels;              // Apodization channels per profile (e.g., 64)
 	uint8_t exec_order_len;             // Length of execution_order array
-	uint8_t execution_order[16];         // Profile indices to cycle through (1-based)
-	uint8_t current_exec_index;          // Current position in execution_order (for auto-cycling)
-	uint8_t apodization_data[16][64];    // Apodization vectors per profile (scaled 0-255)
+	uint8_t execution_order[MAX_PROFILES];         // Profile indices to cycle through (1-based)
+	uint8_t current_exec_index;          // Current position in execution_order (for auto-cycling)MAX_PROFILES
 	bool is_configured;                  // Flag: true if cycle data has been received
 } ProfileCycleConfig;
+
+// Cache the apodization rows in MCU RAM so the selected profile can restore its table.
+static uint8_t apodization_table[MAX_PROFILES][NUM_CHANNELS];
+static uint8_t active_apodization[NUM_CHANNELS];
 
 static ProfileCycleConfig profile_cycle = {
 	.profile_count = 0,
@@ -179,7 +206,8 @@ static void init_profile_cycle_config(void)
 	profile_cycle.current_exec_index = 0;
 	profile_cycle.is_configured = false;
 	memset(profile_cycle.execution_order, 0, sizeof(profile_cycle.execution_order));
-	memset(profile_cycle.apodization_data, 0, sizeof(profile_cycle.apodization_data));
+	memset(apodization_table, 0, sizeof(apodization_table));
+	memset(active_apodization, 0, sizeof(active_apodization));
 }
 
 /**
@@ -200,25 +228,37 @@ static uint8_t get_next_profile_in_cycle(void)
 }
 
 /**
- * Apply apodization for the current profile.
- * Writes the apodization values to the TX7332 for the specified profile.
- * Returns true on success, false on error.
+ * Apply apodization for the selected profile.
+ * Copies the cached row and writes the per-chip apodization register.
  */
-static bool apply_profile_apodization(TX7332 *tx, uint8_t profile_index)
+static void apply_profile_apodization(uint8_t tx_index, uint8_t profile_index)
 {
-	if (!profile_cycle.is_configured || profile_index < 1 || profile_index > 16) {
-		return false;
+	if (tx_index >= TX_PER_MODULE || profile_index < 1U || profile_index > MAX_PROFILES) {
+		return;
 	}
-	
-	// Apodization is stored per profile; profile_index is 1-based
-	uint8_t apod_idx = profile_index - 1;
-	
-	// For now, we could apply apodization by writing to the apodization register
-	// This is a placeholder for the apodization application logic
-	// The actual apodization values would be written to the TX7332 registers
-	// as needed based on the hardware interface
-	
-	return true;
+
+	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
+	// Match SDK chip ordering used for 64->(32,32) split: TX index 0 maps to upper half,
+	// TX index 1 maps to lower half.
+	uint8_t apod_tx_index = tx_index;
+	if (TX_PER_MODULE == 2U) {
+		apod_tx_index = (uint8_t)((tx_index + 1U) % 2U);
+	}
+	uint8_t channel_offset = (uint8_t)(apod_tx_index * TX_APOD_CHANNELS_PER_CHIP);
+	uint32_t apod_register = 0U;
+
+	memcpy(active_apodization, apodization_table[apod_profile], NUM_CHANNELS);
+
+	// TX7332 apodization is a 32-bit active-low channel mask.
+	for (uint8_t channel = 0; channel < TX_APOD_CHANNELS_PER_CHIP; channel++) {
+		uint8_t apod_value = apodization_table[apod_profile][channel_offset + channel];
+		if (apod_value == 0U) {
+			uint8_t lsb = apodization_lsb_for_channel((uint8_t)(channel + 1U));
+			apod_register |= (1UL << lsb);
+		}
+	}
+
+	TX7332_WriteReg(&transmitters[tx_index], TX7332_APODIZATION_REGISTER, apod_register);
 }
 
 static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
@@ -913,6 +953,9 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
 			TX7332_LoadProfile(&transmitters[cmd->addr]);
+
+			// Keep the active apodization row aligned with the selected delay profile.
+			apply_profile_apodization(cmd->addr, profile);
 			break;
 		}
 		case OW_CTRL_GET_PROFILE:
@@ -1003,9 +1046,9 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Extract apodization data per profile
 			uint8_t *apod_data_ptr = &payload[3 + exec_order_len];
 			for (uint8_t p = 0; p < n_profiles; p++) {
-				memcpy(profile_cycle.apodization_data[p], 
-					   &apod_data_ptr[p * 64U], 
-					   64U);
+				memcpy(apodization_table[p],
+					   &apod_data_ptr[p * NUM_CHANNELS],
+					   NUM_CHANNELS);
 			}
 
 			profile_cycle.is_configured = true;
@@ -1083,6 +1126,14 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			reg_value = cmd->data[2] | (cmd->data[3] << 8) | (cmd->data[4] << 16) | (cmd->data[5] << 24);
 
 			TX7332_WriteReg(&transmitters[cmd->addr], reg_address, reg_value);
+			// Keep apodization synchronized when host switches profiles by writing 0x16 directly.
+			if (reg_address == DELAY_PROFILE_SELECT_REGISTER) {
+				uint8_t selected_profile =
+					(uint8_t)(((reg_value >> BF_PROF_SEL_G1_SHIFT) & BF_PROF_SEL_FIELD_MASK) + 1U);
+				if (IsValidPatternProfile(selected_profile)) {
+					apply_profile_apodization(cmd->addr, selected_profile);
+				}
+			}
 			cache_profiles_from_register_range(cmd->addr, reg_address, 1U);
 		}
 		else
