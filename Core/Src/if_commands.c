@@ -118,7 +118,7 @@ static uint8_t selected_profile_response = 0;
 // Pattern profiles are 1 based in the datasheet
 static bool IsValidPatternProfile(uint8_t profile)
 {
-	return (profile >= 1U) && (profile <= MAX_NUMBER_OF_PROFILES);
+	return (profile >= 0) && (profile <= MAX_NUMBER_OF_PROFILES - 1);
 }
 
 // Delay Profiles are 0 based in the datasheet
@@ -141,6 +141,7 @@ static uint32_t BuildDelayProfileSelectValue(uint32_t current_reg, uint8_t profi
 	return next_reg;
 }
 
+// currently only doing pattern profiles
 static bool ExtractUnifiedProfile(uint32_t delay_select_reg,
 								  uint32_t pattern_sel_g1,
 								  uint32_t pattern_sel_g2,
@@ -924,7 +925,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = async_enabled?1:0;
 			uartResp->data_len = 0;
 			break;
-		case OW_CTRL_SET_PROFILE:
+
+
+
+
+		////////////////////////////////////////////////////////////////////////////////////////
+		////////////////////////////////////////////////////////////////////////////////////////
+		////////////////////////////////////////////////////////////////////////////////////////
+		case OW_CTRL_SET_PATTERN_PROFILE:
 		{
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
@@ -943,9 +951,9 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			// Keep TR_SW_DEL timing fields intact while updating delay profile selectors.
-			uint32_t delay_select_reg = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER);
-			delay_select_reg = BuildDelayProfileSelectValue(delay_select_reg, profile);
-			TX7332_WriteReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER, delay_select_reg);
+			// uint32_t delay_select_reg = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER); // why do we need to read this first?
+			// delay_select_reg = BuildDelayProfileSelectValue(delay_select_reg, profile);
+			// TX7332_WriteReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER, delay_select_reg);
 
 			// Pattern profile fields are direct (1-based) selections for each group.
 			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, profile & PATTERN_PROFILE_SELECT_MASK);
@@ -955,10 +963,10 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			TX7332_LoadProfile(&transmitters[cmd->addr]);
 
 			// Keep the active apodization row aligned with the selected delay profile.
-			apply_profile_apodization(cmd->addr, profile);
+			// apply_profile_apodization(cmd->addr, profile); //need to move to the set delay portion
 			break;
 		}
-		case OW_CTRL_GET_PROFILE:
+		case OW_CTRL_GET_PATTERN_PROFILE:
 		{
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
@@ -970,18 +978,93 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			uint32_t delay_select_reg = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER);
+			// uint32_t delay_select_reg = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER);
 			uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1);
 			uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2);
 
-			if (!ExtractUnifiedProfile(delay_select_reg, pattern_sel_g1, pattern_sel_g2, &selected_profile_response)) {
+			uint8_t pattern_g1 = (uint8_t)(pattern_sel_g1 & PATTERN_PROFILE_SELECT_MASK);
+			uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
+
+
+			if ((pattern_g1 != pattern_g2) || !IsValidPatternProfile(pattern_g1)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
+			selected_profile_response = pattern_g1;
+
+			uartResp->data = &selected_profile_response;
+
+			// if (!ExtractUnifiedProfile(DELAY_PROFILE_SELECT_REGISTER, pattern_sel_g1, pattern_sel_g2, &selected_profile_response)) {
+			// 	uartResp->packet_type = OW_ERROR;
+			// 	return;
+			// }
+
+			// uartResp->data = &selected_profile_response;
+			break;
+		}
+
+		case OW_CTRL_SET_DELAY_PROFILE:
+		{
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+
+			if (cmd->addr >= get_tx_chip_count()) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			if (cmd->data_len < 1U) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			uint8_t profile = *((uint8_t *)cmd->data);
+			if (!IsValidDelayProfile(profile)) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			// Set the delay profile on-chip
+			TX7332_WriteReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER, profile);
+
+			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
+			TX7332_LoadProfile(&transmitters[cmd->addr]);
+
+			// Apply the corresponding apodization for the selected delay profile.
+			apply_profile_apodization(cmd->addr, profile);
+			break;
+		}
+
+		case OW_CTRL_GET_DELAY_PROFILE:
+		{
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 1;
+
+			if (cmd->addr >= get_tx_chip_count()) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			uint32_t pattern_sel = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER);
+			uint8_t profile = (uint8_t)(pattern_sel & PATTERN_PROFILE_SELECT_MASK);
+			selected_profile_response = profile;
 			uartResp->data = &selected_profile_response;
 			break;
 		}
+
+
+		////////////////////////////////////////////////////////////////////////////////////////
+		////////////////////////////////////////////////////////////////////////////////////////
+		////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
 		case OW_CTRL_SET_PROFILE_CYCLE:
 		{
 			/**

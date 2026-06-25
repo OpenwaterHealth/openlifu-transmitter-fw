@@ -20,7 +20,7 @@
 
 #define HEADER_SIZE 11
 
-// TX7332 stored pattern and delay profile limit (although delay can be up to 32 profiles)
+// TX7332 stored pattern and delay profile limit (this is a self-imposed limit, the chip supports up to 32 pattern profiles)
 #define MAX_NUMBER_OF_PROFILES          16
 
 // Pattern profile select fields (unfortunately) live in different registers.
