@@ -42,10 +42,7 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-#define MAX_PROFILES 16
-#define NUM_CHANNELS 64
-#define TX_APOD_CHANNELS_PER_CHIP 32U
-#define TX7332_APODIZATION_REGISTER 0x1BU
+
 
 static const uint8_t apodization_channel_order_reversed[TX_APOD_CHANNELS_PER_CHIP] = {
 	16U, 14U, 12U, 10U, 8U, 6U, 4U, 2U,
@@ -99,9 +96,7 @@ typedef struct {
 	bool is_configured;                  // Flag: true if cycle data has been received
 } ProfileCycleConfig;
 
-// Cache the apodization rows in MCU RAM so the selected profile can restore its table.
-static uint8_t apodization_table[MAX_PROFILES][NUM_CHANNELS];
-static uint8_t active_apodization[NUM_CHANNELS];
+
 
 static ProfileCycleConfig profile_cycle = {
 	.profile_count = 0,
@@ -118,27 +113,13 @@ static uint8_t selected_profile_response = 0;
 // Pattern profiles are 1 based in the datasheet
 static bool IsValidPatternProfile(uint8_t profile)
 {
-	return (profile >= 0) && (profile <= MAX_NUMBER_OF_PROFILES - 1);
+	return (profile >= 1U) && (profile <= MAX_NUMBER_OF_PROFILES);
 }
 
-// Delay Profiles are 0 based in the datasheet
+// Delay profiles are 1-based in host API and mapped to 0-based selector bits.
 static bool IsValidDelayProfile(uint8_t profile)
 {
-	return (profile >= 0) && (profile <= MAX_NUMBER_OF_PROFILES - 1);
-}
-
-static uint32_t BuildDelayProfileSelectValue(uint32_t current_reg, uint8_t profile)
-{
-	uint32_t delay_profile_field = (uint32_t)(profile - 1U) & BF_PROF_SEL_FIELD_MASK;
-	uint32_t clear_mask =
-		((uint32_t)BF_PROF_SEL_FIELD_MASK << BF_PROF_SEL_G1_SHIFT) |
-		((uint32_t)BF_PROF_SEL_FIELD_MASK << BF_PROF_SEL_G2_SHIFT);
-
-	// Preserve all non-profile fields (including TR_SW_DEL fields), update only BF_PROF_SEL bits.
-	uint32_t next_reg = current_reg & ~clear_mask;
-	next_reg |= (delay_profile_field << BF_PROF_SEL_G1_SHIFT);
-	next_reg |= (delay_profile_field << BF_PROF_SEL_G2_SHIFT);
-	return next_reg;
+	return (profile >= 1U) && (profile <= MAX_NUMBER_OF_PROFILES);
 }
 
 // currently only doing pattern profiles
@@ -232,35 +213,6 @@ static uint8_t get_next_profile_in_cycle(void)
  * Apply apodization for the selected profile.
  * Copies the cached row and writes the per-chip apodization register.
  */
-static void apply_profile_apodization(uint8_t tx_index, uint8_t profile_index)
-{
-	if (tx_index >= TX_PER_MODULE || profile_index < 1U || profile_index > MAX_PROFILES) {
-		return;
-	}
-
-	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
-	// Match SDK chip ordering used for 64->(32,32) split: TX index 0 maps to upper half,
-	// TX index 1 maps to lower half.
-	uint8_t apod_tx_index = tx_index;
-	if (TX_PER_MODULE == 2U) {
-		apod_tx_index = (uint8_t)((tx_index + 1U) % 2U);
-	}
-	uint8_t channel_offset = (uint8_t)(apod_tx_index * TX_APOD_CHANNELS_PER_CHIP);
-	uint32_t apod_register = 0U;
-
-	memcpy(active_apodization, apodization_table[apod_profile], NUM_CHANNELS);
-
-	// TX7332 apodization is a 32-bit active-low channel mask.
-	for (uint8_t channel = 0; channel < TX_APOD_CHANNELS_PER_CHIP; channel++) {
-		uint8_t apod_value = apodization_table[apod_profile][channel_offset + channel];
-		if (apod_value == 0U) {
-			uint8_t lsb = apodization_lsb_for_channel((uint8_t)(channel + 1U));
-			apod_register |= (1UL << lsb);
-		}
-	}
-
-	TX7332_WriteReg(&transmitters[tx_index], TX7332_APODIZATION_REGISTER, apod_register);
-}
 
 static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
@@ -1027,14 +979,11 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			// Set the delay profile on-chip
-			TX7332_WriteReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER, profile);
+			for (uint8_t i = 0; i < get_tx_chip_count(); i++) {
+				TX7332_SetActiveDelayProfile(profile, &transmitters[i]);
+			}
+			// TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr]);
 
-			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
-			TX7332_LoadProfile(&transmitters[cmd->addr]);
-
-			// Apply the corresponding apodization for the selected delay profile.
-			apply_profile_apodization(cmd->addr, profile);
 			break;
 		}
 
@@ -1050,8 +999,17 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			uint32_t pattern_sel = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER);
-			uint8_t profile = (uint8_t)(pattern_sel & PATTERN_PROFILE_SELECT_MASK);
+			uint8_t profile = 0U;
+			if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile)) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			if (!IsValidDelayProfile(profile)) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
 			selected_profile_response = profile;
 			uartResp->data = &selected_profile_response;
 			break;
@@ -1128,11 +1086,11 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 			// Extract apodization data per profile
 			uint8_t *apod_data_ptr = &payload[3 + exec_order_len];
-			for (uint8_t p = 0; p < n_profiles; p++) {
-				memcpy(apodization_table[p],
-					   &apod_data_ptr[p * NUM_CHANNELS],
-					   NUM_CHANNELS);
-			}
+			// for (uint8_t p = 0; p < n_profiles; p++) {
+			// 	memcpy(apodization_table[p],
+			// 		   &apod_data_ptr[p * NUM_CHANNELS],
+			// 		   NUM_CHANNELS);
+			// }
 
 			profile_cycle.is_configured = true;
 
@@ -1214,7 +1172,7 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uint8_t selected_profile =
 					(uint8_t)(((reg_value >> BF_PROF_SEL_G1_SHIFT) & BF_PROF_SEL_FIELD_MASK) + 1U);
 				if (IsValidPatternProfile(selected_profile)) {
-					apply_profile_apodization(cmd->addr, selected_profile);
+					// apply_profile_apodization(cmd->addr, selected_profile);
 				}
 			}
 			cache_profiles_from_register_range(cmd->addr, reg_address, 1U);
@@ -1438,6 +1396,35 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		uartResp->data_len = 1;
 	}
 		break;
+
+	case OW_TX7332_SET_DELAY_PROFILE:
+	{
+		uartResp->command = cmd->command;
+		uartResp->addr = cmd->addr;
+		uartResp->reserved = cmd->reserved;
+		uartResp->data_len = 0;
+
+		if (cmd->addr >= get_tx_chip_count()) {
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+
+		if (cmd->data_len < 1U) {
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+
+		uint8_t profile = *((uint8_t *)cmd->data);
+		if (!IsValidDelayProfile(profile)) {
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+
+		TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr]);
+
+		break;
+	}
+
 	case OW_TX7332_RESET:
 		uartResp->command = OW_TX7332_RESET;
 		uartResp->addr = 0;

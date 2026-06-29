@@ -20,6 +20,11 @@
 #define TX_PER_MODULE 2
 #define MAX_MODULES   6  // Total number of modules (master + slaves)
 
+#define MAX_PROFILES 16
+#define NUM_CHANNELS 64
+#define TX_APOD_CHANNELS_PER_CHIP 32U
+#define TX7332_APODIZATION_REGISTER 0x1BU
+
 #ifndef FW_VERSION
 #define FW_VERSION "unknown"
 #endif
@@ -133,6 +138,7 @@ typedef enum {
 	OW_TX7332_RBLOCK = 0x27,
 	OW_TX7332_DEVICE_COUNT = 0x2C,
 	OW_TX7332_DEMO = 0x2D,
+	OW_TX7332_SET_DELAY_PROFILE = 0x2E,
 	OW_TX7332_RESET = 0x2F,
 } UstxTX7332Commands;
 
