@@ -532,6 +532,9 @@ int main(void)
   FW_DEBUG("TX7332 initialized (2 tx chips)\r\n");
   HAL_Delay(50);
 
+  // turn this into single function??
+  TX7332_ResetApodizations();
+
   HAL_GPIO_WritePin(TX_CW_EN_GPIO_Port, TX_CW_EN_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(TR1_EN_GPIO_Port, TR1_EN_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(TR2_EN_GPIO_Port, TR2_EN_Pin, GPIO_PIN_SET);

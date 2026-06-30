@@ -188,8 +188,8 @@ static void init_profile_cycle_config(void)
 	profile_cycle.current_exec_index = 0;
 	profile_cycle.is_configured = false;
 	memset(profile_cycle.execution_order, 0, sizeof(profile_cycle.execution_order));
-	memset(apodization_table, 0, sizeof(apodization_table));
-	memset(active_apodization, 0, sizeof(active_apodization));
+	// memset(apodization_table, 0, sizeof(apodization_table));
+	// memset(active_apodization, 0, sizeof(active_apodization));
 }
 
 /**
@@ -1086,11 +1086,11 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 			// Extract apodization data per profile
 			uint8_t *apod_data_ptr = &payload[3 + exec_order_len];
-			// for (uint8_t p = 0; p < n_profiles; p++) {
-			// 	memcpy(apodization_table[p],
-			// 		   &apod_data_ptr[p * NUM_CHANNELS],
-			// 		   NUM_CHANNELS);
-			// }
+			for (uint8_t p = 0; p < n_profiles; p++) {
+				memcpy(apodization_table[p],
+					   &apod_data_ptr[p * NUM_CHANNELS],
+					   NUM_CHANNELS);
+			}
 
 			profile_cycle.is_configured = true;
 

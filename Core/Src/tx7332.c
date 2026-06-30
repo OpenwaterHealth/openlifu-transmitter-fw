@@ -3,6 +3,7 @@
 #include "common.h"
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 
 #define COMMS_TIMEOUT 250
 
@@ -16,6 +17,11 @@ static const uint16_t DELAY_PROFILE_SELECT_REGISTER = 0x16U;
 static const uint8_t BF_PROF_SEL_G1_SHIFT = 28U;
 static const uint8_t BF_PROF_SEL_G2_SHIFT = 12U;
 static const uint8_t BF_PROF_SEL_FIELD_MASK = 0x0FU;
+
+uint8_t apodization_table[MAX_PROFILES][NUM_CHANNELS];
+uint8_t active_apodization[NUM_CHANNELS];
+
+static void apply_profile_apodization(TX7332* device, uint8_t profile_index);
 
 
 static const uint32_t SwapEndian(uint32_t val) {
@@ -225,7 +231,7 @@ void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device)
     delay_select_reg_raw = TX7332_ReadReg(device, DELAY_PROFILE_SELECT_REGISTER);
     
     delay_select_reg = BuildDelayProfileSelectValue(delay_select_reg_raw, profile);
-    printf("[DEBUG] TX7332_SetActiveDelayProfile: profile=%u, delay_select_reg=0x%08X\n", profile, delay_select_reg);
+    printf("[DEBUG] TX7332_SetActiveDelayProfile: profile=%u, delay_select_reg=0x%08lX\n", profile, (unsigned long)delay_select_reg);
     
     TX7332_WriteReg(device, DELAY_PROFILE_SELECT_REGISTER, delay_select_reg);
 
@@ -234,7 +240,7 @@ void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device)
 
     // Apply the corresponding apodization for the selected delay profile.
     // need to update 
-    // apply_profile_apodization(device->index, profile);
+    apply_profile_apodization(device, profile);
 }
 
 bool TX7332_GetActiveDelayProfile(TX7332* device, uint8_t* profile)
@@ -255,34 +261,42 @@ bool TX7332_GetActiveDelayProfile(TX7332* device, uint8_t* profile)
 	return true;
 }
 
-// static void apply_profile_apodization(uint8_t tx_index, uint8_t profile_index)
-// {
-// 	if (tx_index >= TX_PER_MODULE || profile_index < 1U || profile_index > MAX_PROFILES) {
-// 		return;
-// 	}
+static void apply_profile_apodization(TX7332* device, uint8_t profile_index)
+{
+    if (device == NULL || profile_index < 1U || profile_index > MAX_PROFILES) {
+		return;
+	}
 
-// 	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
-// 	// Match SDK chip ordering used for 64->(32,32) split: TX index 0 maps to upper half,
-// 	// TX index 1 maps to lower half.
-// 	uint8_t apod_tx_index = tx_index;
-// 	if (TX_PER_MODULE == 2U) {
-// 		apod_tx_index = (uint8_t)((tx_index + 1U) % 2U);
-// 	}
-// 	uint8_t channel_offset = (uint8_t)(apod_tx_index * TX_APOD_CHANNELS_PER_CHIP);
-// 	uint32_t apod_register = 0U;
+    printf("apodization table contents:\n");
+    for (uint8_t i = 0; i < MAX_PROFILES; i++) {
+        printf("Profile %d: ", i + 1);
+        for (uint8_t j = 0; j < NUM_CHANNELS; j++)
+        {
+            printf("%d ", apodization_table[i][j]);
+        }
+        printf("\n");
+    }
 
-// 	memcpy(active_apodization, apodization_table[apod_profile], NUM_CHANNELS);
+	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
+    uint8_t channel_offset = 0U;
+	uint32_t apod_register = 0U;
 
-// 	// TX7332 apodization is a 32-bit active-low channel mask.
-// 	for (uint8_t channel = 0; channel < TX_APOD_CHANNELS_PER_CHIP; channel++) {
-// 		uint8_t apod_value = apodization_table[apod_profile][channel_offset + channel];
-// 		if (apod_value == 0U) {
-// 			uint8_t lsb = apodization_lsb_for_channel((uint8_t)(channel + 1U));
-// 			apod_register |= (1UL << lsb);
-// 		}
-// 	}
+	memcpy(active_apodization, apodization_table[apod_profile], NUM_CHANNELS);
 
-//     // need to update
-// 	// TX7332_WriteReg(&transmitters[tx_index], TX7332_APODIZATION_REGISTER, apod_register);
-// }
+	// TX7332 apodization is a 32-bit active-low channel mask.
+	for (uint8_t channel = 0; channel < TX_APOD_CHANNELS_PER_CHIP; channel++) {
+		uint8_t apod_value = apodization_table[apod_profile][channel_offset + channel];
+		if (apod_value == 0U) {
+            uint8_t lsb = channel;
+			apod_register |= (1UL << lsb);
+		}
+	}
 
+    TX7332_WriteReg(device, TX7332_APODIZATION_REGISTER, apod_register);
+}
+
+void TX7332_ResetApodizations()
+{
+    memset(apodization_table, 0, sizeof(apodization_table));
+    memset(active_apodization, 0, sizeof(active_apodization));
+}
