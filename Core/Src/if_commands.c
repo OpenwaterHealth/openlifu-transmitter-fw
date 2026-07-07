@@ -139,9 +139,13 @@ static bool ExtractUnifiedProfile(uint32_t delay_select_reg,
 		return false;
 	}
 
-	// Delay select fields are 0-based; pattern fields are 1-based.
+	// Both delay and pattern selector fields are 0-based in the TX7332 registers.
+	if (delay_g1 != pattern_g1) {
+		return false;
+	}
+
 	uint8_t delay_profile = (uint8_t)(delay_g1 + 1U);
-	if (delay_profile != pattern_g1 || !IsValidDelayProfile(delay_profile)) {
+	if (!IsValidDelayProfile(delay_profile)) {
 		return false;
 	}
 
@@ -246,9 +250,9 @@ bool apply_next_profile_in_cycle(void)
 		// Apply delay profile
 		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi]);
 		
-		// Apply pattern profile
-		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, next_profile & PATTERN_PROFILE_SELECT_MASK);
-		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G2, next_profile & PATTERN_PROFILE_SELECT_MASK);
+		// Apply pattern profile (TX7332 pattern selector is 0-based)
+		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G2, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 		
 		// Load profile (self-clearing LOAD_PROF bit)
 		TX7332_LoadProfile(&transmitters[txi]);
@@ -986,9 +990,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// delay_select_reg = BuildDelayProfileSelectValue(delay_select_reg, profile);
 			// TX7332_WriteReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER, delay_select_reg);
 
-			// Pattern profile fields are direct (1-based) selections for each group.
-			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, profile & PATTERN_PROFILE_SELECT_MASK);
-			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2, profile & PATTERN_PROFILE_SELECT_MASK);
+			// Pattern profile selector is 0-based in the TX7332 register.\n			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 
 			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
 			TX7332_LoadProfile(&transmitters[cmd->addr]);
@@ -1016,13 +1019,13 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uint8_t pattern_g1 = (uint8_t)(pattern_sel_g1 & PATTERN_PROFILE_SELECT_MASK);
 			uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
 
-
-			if ((pattern_g1 != pattern_g2) || !IsValidPatternProfile(pattern_g1)) {
+			// Pattern selector is 0-based in hardware; convert to 1-based for host.
+			if ((pattern_g1 != pattern_g2) || !IsValidPatternProfile(pattern_g1 + 1U)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			selected_profile_response = pattern_g1;
+			selected_profile_response = pattern_g1 + 1U;
 
 			uartResp->data = &selected_profile_response;
 
