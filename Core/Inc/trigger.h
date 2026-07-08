@@ -28,8 +28,7 @@ typedef enum {
 	AUTO_CYCLE_IDLE = 0,
 	AUTO_CYCLE_RUNNING = 1,
 	AUTO_CYCLE_PENDING_APPLY = 2,
-	AUTO_CYCLE_APPLYING = 3,
-	AUTO_CYCLE_ERROR = 4
+	AUTO_CYCLE_ERROR = 3
 } AutoCycleState_e;
 
 typedef struct {
@@ -53,8 +52,6 @@ typedef struct {
 	uint8_t current_profile;             // Profile executed in current/last cycle
 	uint8_t next_profile;                // Profile to apply next
 	volatile bool apply_pending;         // Flag set by callback, serviced by main loop
-	uint32_t apply_start_tick;           // Timestamp of when apply was requested (for timeout)
-	uint32_t apply_timeout_ms;           // Timeout for profile apply operation
 } AutoCycleContext_t;
 
 extern volatile uint8_t _running;
