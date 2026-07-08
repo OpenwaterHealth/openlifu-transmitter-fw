@@ -42,6 +42,8 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+#define AUTO_CYCLE_DEBUG_RUN_UNTIL_STOP UINT32_MAX
+
 
 
 static const uint8_t apodization_channel_order_reversed[TX_APOD_CHANNELS_PER_CHIP] = {
@@ -207,6 +209,53 @@ static uint8_t get_next_profile_in_cycle(void)
 	profile_cycle.current_exec_index = (profile_cycle.current_exec_index + 1) % profile_cycle.exec_order_len;
 	
 	return profile_cycle.execution_order[next_index];
+}
+
+/**
+ * apply_next_profile_in_cycle()
+ * 
+ * Called from auto_cycle_service (main loop context, safe for SPI writes).
+ * This applies the next profile in the cycle to all configured TX chips:
+ * 1. Get next profile index from execution_order
+ * 2. Apply delay profile to all TX chips
+ * 3. Apply pattern profile to all TX chips
+ * 4. Apply apodization to all TX chips
+ * 5. Load/commit profile
+ *
+ * Returns true on success, false on error.
+ */
+bool apply_next_profile_in_cycle(void)
+{
+	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {
+		printf("[APPLY_PROFILE] ERROR: Cycle not configured\r\n");
+		return false;
+	}
+
+	// Get the next profile to apply
+	uint8_t next_profile = get_next_profile_in_cycle();
+	printf("[APPLY_PROFILE] Applying profile %u\r\n", next_profile);
+
+	if (!IsValidDelayProfile(next_profile) || !IsValidPatternProfile(next_profile)) {
+		printf("[APPLY_PROFILE] ERROR: Invalid profile %u\r\n", next_profile);
+		return false;
+	}
+
+	// Apply to all TX chips
+	uint8_t tx_count = get_tx_chip_count();
+	for (uint8_t txi = 0; txi < tx_count; txi++) {
+		// Apply delay profile
+		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi]);
+		
+		// Apply pattern profile
+		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, next_profile & PATTERN_PROFILE_SELECT_MASK);
+		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G2, next_profile & PATTERN_PROFILE_SELECT_MASK);
+		
+		// Load profile (self-clearing LOAD_PROF bit)
+		TX7332_LoadProfile(&transmitters[txi]);
+	}
+
+	printf("[APPLY_PROFILE] Profile %u applied successfully\r\n", next_profile);
+	return true;
 }
 
 /**
@@ -664,9 +713,31 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			if(!tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING)
-			{
-				uartResp->packet_type = OW_ERROR;
+			
+			// Check if auto-cycle should be enabled
+			if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
+				// Debug mode: apply the first profile immediately, then keep cycling until STOP.
+				printf("[START_TRIGGER] Auto-cycle debug mode: looping until stop\r\n");
+				profile_cycle.current_exec_index = 0;
+				if (!apply_next_profile_in_cycle()) {
+					uartResp->packet_type = OW_ERROR;
+					break;
+				}
+
+				extern void auto_cycle_start(uint32_t total_cycles);
+				auto_cycle_start(AUTO_CYCLE_DEBUG_RUN_UNTIL_STOP);
+				
+				if(start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
+					uartResp->packet_type = OW_ERROR;
+					extern void auto_cycle_stop(void);
+					auto_cycle_stop();
+				}
+			} else {
+				// Normal mode: single trigger sequence
+				printf("[START_TRIGGER] Normal mode\r\n");
+				if(!tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
+					uartResp->packet_type = OW_ERROR;
+				}
 			}
 			break;
 		case OW_CTRL_STOP_SWTRIG:
@@ -677,6 +748,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			if(stop_trigger_pulse() != TRIGGER_STATUS_READY)
 			{
 				uartResp->packet_type = OW_ERROR;
+			}
+			
+			// Stop auto-cycle if active
+			extern bool auto_cycle_is_active(void);
+			if (auto_cycle_is_active()) {
+				printf("[STOP_TRIGGER] Stopping auto-cycle\r\n");
+				extern void auto_cycle_stop(void);
+				auto_cycle_stop();
 			}
 			break;
 		case OW_CTRL_SET_SWTRIG:
@@ -1040,6 +1119,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
+
+			// Gating: Prevent cycle config changes while auto-cycle is running
+			extern bool auto_cycle_is_active(void);
+			if (auto_cycle_is_active()) {
+				printf("[SET_PROFILE_CYCLE] ERROR: Cannot configure cycle while auto-cycle is active\r\n");
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
 
 			// Minimum payload: 3 bytes header
 			if (cmd->data_len < 3U) {

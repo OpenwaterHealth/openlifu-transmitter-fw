@@ -649,6 +649,10 @@ int main(void)
       if (get_device_role() == ROLE_MASTER)
       {
         comms_host_check_received(); // check comms
+        
+        // Service auto-cycle state machine (deferred profile apply)
+        extern void auto_cycle_service(void);
+        auto_cycle_service();
       }
       else
       {

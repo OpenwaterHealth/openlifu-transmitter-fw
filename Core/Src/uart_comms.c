@@ -790,6 +790,19 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 }
 
 void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
+	// ========== AUTO-CYCLE CHECK ==========
+	// If auto-cycle is active and this is the last train of the sequence,
+	// request the next profile apply. Otherwise continue normally.
+	extern bool auto_cycle_is_active(void);
+	extern void auto_cycle_request_profile_apply(void);
+	
+	if (auto_cycle_is_active() && curr_count >= total_count) {
+		// This trigger sequence is done. Request next profile apply.
+		auto_cycle_request_profile_apply();
+		// Early exit; don't send async status packet
+		return;
+	}
+	
 	if(async_enabled){
 		int tx_temp_int = (int)(tx_temperature * 10);  // e.g. 32.6 → 326
 		int amb_temp_int = (int)(ambient_temperature * 10);  // e.g. 32.6 → 326
@@ -835,6 +848,16 @@ void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
 
 // STATUS:RUNNING,MODE:SEQUENCE,PULSE_TRAIN:[2/5],PULSE:[3/10],TEMP_TX:32.6,TEMP_AMBIENT:29.1
 void sequence_complete_callback(uint32_t total_count) {
+	// ========== AUTO-CYCLE CHECK ==========
+	// If auto-cycle is active, request next profile apply.
+	extern bool auto_cycle_is_active(void);
+	extern void auto_cycle_request_profile_apply(void);
+	
+	if (auto_cycle_is_active()) {
+		auto_cycle_request_profile_apply();
+		// Early exit; don't send async status packet
+		return;
+	}
 
 	if(async_enabled){
 

@@ -24,6 +24,18 @@ static volatile OW_TimerData _timerDataConfig = {
 		.TriggerStatus = TRIGGER_STATUS_NOT_CONFIGURED
 };
 
+// ========== AUTO-CYCLE STATE MACHINE ==========
+static AutoCycleContext_t _auto_cycle = {
+	.state = AUTO_CYCLE_IDLE,
+	.is_active = false,
+	.cycles_completed = 0,
+	.cycles_remaining = 0,
+	.current_profile = 0,
+	.next_profile = 0,
+	.apply_pending = false,
+	.apply_start_tick = 0,
+	.apply_timeout_ms = 500  // 500ms timeout for profile apply operation
+};
 
 
 static int jsoneq(const char *json, const jsmntok_t *tok, const char *s) {
@@ -496,4 +508,113 @@ void TRIG_TIM1_IRQHandler(void) {
     	}
     }
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
+}
+
+// ========== AUTO-CYCLE IMPLEMENTATION ==========
+
+void auto_cycle_start(uint32_t total_cycles)
+{
+	_auto_cycle.state = AUTO_CYCLE_RUNNING;
+	_auto_cycle.is_active = true;
+	_auto_cycle.cycles_completed = 0;
+	_auto_cycle.cycles_remaining = total_cycles;
+	_auto_cycle.apply_pending = false;
+	printf("[AUTO_CYCLE] Started: %lu cycles\r\n", total_cycles);
+}
+
+void auto_cycle_stop(void)
+{
+	_auto_cycle.state = AUTO_CYCLE_IDLE;
+	_auto_cycle.is_active = false;
+	_auto_cycle.cycles_remaining = 0;
+	_auto_cycle.apply_pending = false;
+	printf("[AUTO_CYCLE] Stopped\r\n");
+}
+
+bool auto_cycle_is_active(void)
+{
+	return _auto_cycle.is_active;
+}
+
+AutoCycleState_e auto_cycle_get_state(void)
+{
+	return _auto_cycle.state;
+}
+
+uint32_t auto_cycle_get_remaining_cycles(void)
+{
+	return _auto_cycle.cycles_remaining;
+}
+
+void auto_cycle_request_profile_apply(void)
+{
+	// This is called from ISR/callback context. Just set flag and timestamp.
+	// Actual profile apply will happen in main loop.
+	if (!_auto_cycle.is_active) return;
+	
+	_auto_cycle.state = AUTO_CYCLE_PENDING_APPLY;
+	_auto_cycle.apply_pending = true;
+	_auto_cycle.apply_start_tick = HAL_GetTick();
+	printf("[AUTO_CYCLE] Profile apply requested (pending)\r\n");
+}
+
+void auto_cycle_service(void)
+{
+	// Called from main loop to service deferred profile apply.
+	// This is where SPI writes happen, safe from ISR context.
+	
+	if (!_auto_cycle.is_active) return;
+	if (!_auto_cycle.apply_pending) return;
+	if (_auto_cycle.state != AUTO_CYCLE_PENDING_APPLY) return;
+	
+	// Check for timeout
+	uint32_t elapsed = HAL_GetTick() - _auto_cycle.apply_start_tick;
+	if (elapsed > _auto_cycle.apply_timeout_ms) {
+		printf("[AUTO_CYCLE] ERROR: Profile apply timeout (%lu ms)\r\n", elapsed);
+		_auto_cycle.state = AUTO_CYCLE_ERROR;
+		_auto_cycle.apply_pending = false;
+		return;
+	}
+	
+	// Transition to APPLYING state
+	_auto_cycle.state = AUTO_CYCLE_APPLYING;
+	
+	// ========== PROFILE APPLY HAPPENS HERE ==========
+	// This is called with a hook function to apply the profile.
+	// The implementation is in if_commands.c (apply_next_profile_in_cycle).
+	// For now, we just signal that we're ready.
+	extern bool apply_next_profile_in_cycle(void);
+	
+	if (!apply_next_profile_in_cycle()) {
+		printf("[AUTO_CYCLE] ERROR: Failed to apply profile\r\n");
+		_auto_cycle.state = AUTO_CYCLE_ERROR;
+		_auto_cycle.apply_pending = false;
+		auto_cycle_stop();
+		return;
+	}
+	
+	// Profile applied successfully
+	_auto_cycle.cycles_completed++;
+	_auto_cycle.cycles_remaining--;
+	_auto_cycle.apply_pending = false;
+	
+	printf("[AUTO_CYCLE] Profile applied: cycles_completed=%lu, cycles_remaining=%lu\r\n",
+		   _auto_cycle.cycles_completed, _auto_cycle.cycles_remaining);
+	
+	// Check if we're done
+	if (_auto_cycle.cycles_remaining == 0) {
+		printf("[AUTO_CYCLE] All cycles complete\r\n");
+		_auto_cycle.state = AUTO_CYCLE_IDLE;
+		_auto_cycle.is_active = false;
+		return;
+	}
+	
+	// Restart trigger for next cycle
+	_auto_cycle.state = AUTO_CYCLE_RUNNING;
+	if (start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
+		printf("[AUTO_CYCLE] ERROR: Failed to restart trigger\r\n");
+		_auto_cycle.state = AUTO_CYCLE_ERROR;
+		auto_cycle_stop();
+		return;
+	}
 }
