@@ -21,7 +21,17 @@ static const uint8_t BF_PROF_SEL_FIELD_MASK = 0x0FU;
 uint8_t apodization_table[MAX_PROFILES][NUM_CHANNELS];
 uint8_t active_apodization[NUM_CHANNELS];
 
-static void apply_profile_apodization(TX7332* device, uint8_t profile_index);
+static void apply_profile_apodization(TX7332* device, uint8_t chip_index, uint8_t profile_index);
+
+/**
+ * TX7332 apodization register channel-to-bit mapping.
+ * Index = per-chip channel (0-based), Value = bit position in the 32-bit apod register.
+ * Derived from APODIZATION_CHANNEL_ORDER_REVERSED in the SDK.
+ */
+static const uint8_t APOD_CHANNEL_TO_BIT[TX_APOD_CHANNELS_PER_CHIP] = {
+    15,  7, 14,  6, 13,  5, 12,  4, 11,  3, 10,  2,  9,  1,  8,  0,
+    31, 23, 30, 22, 29, 21, 28, 20, 27, 19, 26, 18, 25, 17, 24, 16
+};
 
 
 static const uint32_t SwapEndian(uint32_t val) {
@@ -225,7 +235,7 @@ static uint32_t BuildDelayProfileSelectValue(uint32_t current_reg, uint8_t profi
 uint32_t delay_select_reg_raw;
 uint32_t delay_select_reg;
 
-void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device)
+void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device, uint8_t chip_index)
 {
         // Update only BF_PROF_SEL fields and preserve TR_SW_DEL timing fields.
     delay_select_reg_raw = TX7332_ReadReg(device, DELAY_PROFILE_SELECT_REGISTER);
@@ -239,8 +249,7 @@ void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device)
     TX7332_LoadProfile(device);
 
     // Apply the corresponding apodization for the selected delay profile.
-    // need to update 
-    apply_profile_apodization(device, profile);
+    apply_profile_apodization(device, chip_index, profile);
 }
 
 bool TX7332_GetActiveDelayProfile(TX7332* device, uint8_t* profile)
@@ -261,7 +270,7 @@ bool TX7332_GetActiveDelayProfile(TX7332* device, uint8_t* profile)
 	return true;
 }
 
-static void apply_profile_apodization(TX7332* device, uint8_t profile_index)
+static void apply_profile_apodization(TX7332* device, uint8_t chip_index, uint8_t profile_index)
 {
     if (device == NULL || profile_index < 1U || profile_index > MAX_PROFILES) {
 		return;
@@ -278,7 +287,8 @@ static void apply_profile_apodization(TX7332* device, uint8_t profile_index)
     }
 
 	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
-    uint8_t channel_offset = 0U;
+	// SDK maps: chip_index 0 -> global channels 32-63, chip_index 1 -> global channels 0-31
+	uint8_t channel_offset = (uint8_t)(((chip_index + 1U) % 2U) * TX_APOD_CHANNELS_PER_CHIP);
 	uint32_t apod_register = 0U;
 
 	memcpy(active_apodization, apodization_table[apod_profile], NUM_CHANNELS);
@@ -287,7 +297,7 @@ static void apply_profile_apodization(TX7332* device, uint8_t profile_index)
 	for (uint8_t channel = 0; channel < TX_APOD_CHANNELS_PER_CHIP; channel++) {
 		uint8_t apod_value = apodization_table[apod_profile][channel_offset + channel];
 		if (apod_value == 0U) {
-            uint8_t lsb = channel;
+			uint8_t lsb = APOD_CHANNEL_TO_BIT[channel];
 			apod_register |= (1UL << lsb);
 		}
 	}

@@ -248,7 +248,7 @@ bool apply_next_profile_in_cycle(void)
 	uint8_t tx_count = get_tx_chip_count();
 	for (uint8_t txi = 0; txi < tx_count; txi++) {
 		// Apply delay profile
-		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi]);
+		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi], txi);
 		
 		// Apply pattern profile (TX7332 pattern selector is 0-based)
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
@@ -1062,7 +1062,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			for (uint8_t i = 0; i < get_tx_chip_count(); i++) {
-				TX7332_SetActiveDelayProfile(profile, &transmitters[i]);
+				TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
 			}
 			// TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr]);
 
@@ -1510,7 +1510,7 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			return;
 		}
 
-		TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr]);
+		TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr], cmd->addr);
 
 		break;
 	}

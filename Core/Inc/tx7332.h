@@ -31,7 +31,7 @@ bool TX7332_WriteBulkVerify(TX7332* device, uint16_t addr, uint32_t* be_bytes, i
 
 void TX7332_SetRepeat(TX7332* device, int count);
 void TX7332_LoadProfile(TX7332* device);
-void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device);
+void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device, uint8_t chip_index);
 bool TX7332_GetActiveDelayProfile(TX7332* device, uint8_t* profile);
 
 #ifdef __cplusplus
