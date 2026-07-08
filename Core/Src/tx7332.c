@@ -18,20 +18,10 @@ static const uint8_t BF_PROF_SEL_G1_SHIFT = 28U;
 static const uint8_t BF_PROF_SEL_G2_SHIFT = 12U;
 static const uint8_t BF_PROF_SEL_FIELD_MASK = 0x0FU;
 
-uint8_t apodization_table[MAX_PROFILES][NUM_CHANNELS];
-uint8_t active_apodization[NUM_CHANNELS];
+uint32_t apod_registers[MAX_PROFILES][TX_PER_MODULE];
+uint32_t active_apod_registers[TX_PER_MODULE];
 
 static void apply_profile_apodization(TX7332* device, uint8_t chip_index, uint8_t profile_index);
-
-/**
- * TX7332 apodization register channel-to-bit mapping.
- * Index = per-chip channel (0-based), Value = bit position in the 32-bit apod register.
- * Derived from APODIZATION_CHANNEL_ORDER_REVERSED in the SDK.
- */
-static const uint8_t APOD_CHANNEL_TO_BIT[TX_APOD_CHANNELS_PER_CHIP] = {
-    15,  7, 14,  6, 13,  5, 12,  4, 11,  3, 10,  2,  9,  1,  8,  0,
-    31, 23, 30, 22, 29, 21, 28, 20, 27, 19, 26, 18, 25, 17, 24, 16
-};
 
 
 static const uint32_t SwapEndian(uint32_t val) {
@@ -287,26 +277,15 @@ static void apply_profile_apodization(TX7332* device, uint8_t chip_index, uint8_
     }
 
 	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
-	// SDK maps: chip_index 0 -> global channels 32-63, chip_index 1 -> global channels 0-31
-	uint8_t channel_offset = (uint8_t)(((chip_index + 1U) % 2U) * TX_APOD_CHANNELS_PER_CHIP);
-	uint32_t apod_register = 0U;
 
-	memcpy(active_apodization, apodization_table[apod_profile], NUM_CHANNELS);
-
-	// TX7332 apodization is a 32-bit active-low channel mask.
-	for (uint8_t channel = 0; channel < TX_APOD_CHANNELS_PER_CHIP; channel++) {
-		uint8_t apod_value = apodization_table[apod_profile][channel_offset + channel];
-		if (apod_value == 0U) {
-			uint8_t lsb = APOD_CHANNEL_TO_BIT[channel];
-			apod_register |= (1UL << lsb);
-		}
-	}
-
-    TX7332_WriteReg(device, TX7332_APODIZATION_REGISTER, apod_register);
+	// Write the pre-computed apodization register from SDK.
+	uint32_t apod_reg = apod_registers[apod_profile][chip_index];
+	active_apod_registers[chip_index] = apod_reg;
+	TX7332_WriteReg(device, TX7332_APODIZATION_REGISTER, apod_reg);
 }
 
 void TX7332_ResetApodizations()
 {
-    memset(apodization_table, 0, sizeof(apodization_table));
-    memset(active_apodization, 0, sizeof(active_apodization));
+    memset(apod_registers, 0, sizeof(apod_registers));
+    memset(active_apod_registers, 0, sizeof(active_apod_registers));
 }

@@ -14,9 +14,9 @@ typedef struct TX7332 {
     uint16_t cs_pin;
 } TX7332;
 
-// Cache the apodization rows in MCU RAM so the selected profile can restore its table.
-extern uint8_t apodization_table[MAX_PROFILES][NUM_CHANNELS];
-extern uint8_t active_apodization[NUM_CHANNELS];
+// Pre-computed apodization register values from SDK, one uint32 per chip per profile.
+extern uint32_t apod_registers[MAX_PROFILES][TX_PER_MODULE];
+extern uint32_t active_apod_registers[TX_PER_MODULE];
 
 
 // Function prototypes

@@ -1110,13 +1110,16 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			/**
 			 * Grouped Profile Cycle Command Handler
 			 *
-			 * Receives execution_order list and apodization data from host.
-			 * Stores this configuration in MCU RAM for runtime profile cycling.
+			 * Receives execution_order and pre-computed apodization registers from host.
+			 * The SDK computes the TX7332 apodization register values (including
+			 * channel-to-bit mapping) and sends them directly as uint32 per chip.
 			 *
 			 * Packet Format:
-			 *   [profile_count:1] [apod_channels:1] [exec_order_len:1]
-			 *   [execution_order[0..exec_order_len-1]:N bytes]
-			 *   [apod_profile_1[0..63]:64 bytes] ... [apod_profile_N[0..63]:64 bytes]
+			 *   [profile_count:1] [n_chips:1] [exec_order_len:1]
+			 *   [execution_order[0..exec_order_len-1]: N bytes]
+			 *   [profile_0_chip_0_apod_reg: 4 bytes LE] [profile_0_chip_1_apod_reg: 4 bytes LE]
+			 *   [profile_1_chip_0_apod_reg: 4 bytes LE] [profile_1_chip_1_apod_reg: 4 bytes LE]
+			 *   ...
 			 */
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
@@ -1139,19 +1142,19 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 			uint8_t *payload = (uint8_t *)cmd->data;
 			uint8_t n_profiles = payload[0];
-			uint8_t n_apod_channels = payload[1];
+			uint8_t n_chips = payload[1];
 			uint8_t exec_order_len = payload[2];
 
 			// Validate ranges
-			if (n_profiles < 1 || n_profiles > 16 || 
-				n_apod_channels != 64 || 
-				exec_order_len < 1 || exec_order_len > 16) {
+			if (n_profiles < 1 || n_profiles > MAX_PROFILES ||
+				n_chips < 1 || n_chips > TX_PER_MODULE ||
+				exec_order_len < 1 || exec_order_len > MAX_PROFILES) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			// Expected payload size: 3 (header) + exec_order_len + (n_profiles * 64)
-			uint16_t expected_size = 3U + (uint16_t)exec_order_len + ((uint16_t)n_profiles * 64U);
+			// Expected payload: 3 (header) + exec_order_len + (n_profiles * n_chips * 4)
+			uint16_t expected_size = 3U + (uint16_t)exec_order_len + ((uint16_t)n_profiles * (uint16_t)n_chips * 4U);
 			if (cmd->data_len < expected_size) {
 				uartResp->packet_type = OW_ERROR;
 				return;
@@ -1159,7 +1162,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 			// ========== STORE CONFIGURATION ==========
 			profile_cycle.profile_count = n_profiles;
-			profile_cycle.apod_channels = n_apod_channels;
+			profile_cycle.apod_channels = n_chips;
 			profile_cycle.exec_order_len = exec_order_len;
 			profile_cycle.current_exec_index = 0;
 
@@ -1174,12 +1177,16 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				profile_cycle.execution_order[i] = profile_idx;
 			}
 
-			// Extract apodization data per profile
+			// Extract pre-computed apodization registers per profile per chip (little-endian uint32)
 			uint8_t *apod_data_ptr = &payload[3 + exec_order_len];
 			for (uint8_t p = 0; p < n_profiles; p++) {
-				memcpy(apodization_table[p],
-					   &apod_data_ptr[p * NUM_CHANNELS],
-					   NUM_CHANNELS);
+				for (uint8_t c = 0; c < n_chips; c++) {
+					uint8_t *reg_ptr = &apod_data_ptr[(p * n_chips + c) * 4U];
+					apod_registers[p][c] = (uint32_t)reg_ptr[0]
+						| ((uint32_t)reg_ptr[1] << 8)
+						| ((uint32_t)reg_ptr[2] << 16)
+						| ((uint32_t)reg_ptr[3] << 24);
+				}
 			}
 
 			profile_cycle.is_configured = true;
