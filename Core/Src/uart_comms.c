@@ -9,6 +9,7 @@
 #include "main.h"
 #include "module_manager.h"
 #include "uart_comms.h"
+#include "i2c_slave.h"
 #include "trigger.h"
 #include "utils.h"
 #include "usbd_cdc_if.h"
@@ -516,10 +517,17 @@ void comms_onewire_check_received()
         goto NextOneWirePacket;
     }
 
-    // If this slave is already configured, relay discovery packets to the next slave in the chain
+    // Relay one-wire packets to the next slave so the master's request propagates
+    // hop-by-hop. A configured slave relays:
+    //   - DISCOVERY for a DIFFERENT module_id (its own is handled locally as an
+    //     idempotent re-claim below — this is what makes a master reboot recover
+    //     cleanly without any teardown), and
+    //   - CLEAR_CONFIG always (an explicit chain-wide address reset).
+    bool _ow_is_disc  = (ow_receive_packet.command == OW_CMD_DISCOVERY);
+    bool _ow_is_clear = (ow_receive_packet.command == OW_CMD_CLEAR_CONFIG);
     if (ow_receive_packet.packet_type == OW_ONE_WIRE &&
-        ow_receive_packet.command == OW_CMD_DISCOVERY &&
-        get_configured() && get_module_ID() != 0)
+        get_configured() && get_module_ID() != 0 &&
+        ((_ow_is_disc && ow_receive_packet.reserved != get_module_ID()) || _ow_is_clear))
     {
         memset((void*)&ow_data_packet, 0, sizeof(ow_data_packet));
         if (comms_callout_onewire_send(&ow_receive_packet)) {
@@ -528,6 +536,21 @@ void comms_onewire_check_received()
         } else {
             ow_send_packet.id = ow_receive_packet.id;
             ow_send_packet.packet_type = OW_ERROR;
+            ow_send_packet.data_len = 0;
+            ow_send_packet.data = NULL;
+        }
+
+        // For clear-config, after propagating downstream, drop our OWN stale state.
+        // set_configured(false) wipes the module storage; the outer boot loop then
+        // re-enters slave configuration (which de-inits I2C) and waits for a fresh
+        // discovery assignment. (Explicit command path only — not used at boot.)
+        if (_ow_is_clear) {
+            set_configured(false);
+            set_module_ID(0);
+            set_slave_address(0);
+            ow_send_packet.id = ow_receive_packet.id;
+            ow_send_packet.packet_type = OW_ONEWIRE_RESP;
+            ow_send_packet.command = OW_CMD_CLEAR_CONFIG;
             ow_send_packet.data_len = 0;
             ow_send_packet.data = NULL;
         }
@@ -580,6 +603,11 @@ bool configure_master()
 	ow_packet_count = 0;
 	bool bRet = true;
 	set_module_ID(0);
+	// Recover the shared inter-board I2C bus in case it was left wedged (SDA/SCL
+	// stuck low) by a master-only reboot that interrupted a forwarded transaction.
+	// Harmless on a clean bus (SDA already high -> immediate return). Runs before
+	// any forwarding so enumeration + slave reads start from a clean bus.
+	I2C_BusRecovery(GLOBAL_I2C_DEVICE);
     HAL_UART_Abort(&CALL_OUT_UART);
     rx_ow_callin_flag = 0;
     tx_ow_callin_flag = 0;
@@ -597,6 +625,10 @@ bool configure_slave()
 	bool bRet = false;
 	CDC_Stop_ReceiveToIdle();
 	ModuleManager_DeInit();
+	// Drop any stale I2C slave address so a just-cleared node stops answering at
+	// its old address until it is re-assigned one during discovery. Re-armed by
+	// I2C_Slave_Init() once a fresh address is claimed.
+	I2C_Slave_DeInit();
 	set_device_role(ROLE_SLAVE);
 	// configure slave
 	comms_onewire_slave_start();
@@ -635,8 +667,13 @@ bool enumerate_slaves()
 			if (ow_receive_packet.packet_type != OW_ERROR && ow_receive_packet.packet_type != OW_TIMEOUT)
 			{
 				//printf("Slave found at I2C address 0x%02X\r\n", next_address);
+				// The discovery response payload carries the node's operating mode
+				// (app vs bootloader). Legacy firmware answers with no payload -> APP.
+				uint8_t node_mode = (ow_receive_packet.data_len >= 1 && ow_receive_packet.data != NULL)
+				                    ? ow_receive_packet.data[0]
+				                    : (uint8_t)NODE_MODE_APP;
 				// Record the slave if necessary, e.g. store the address.
-				ModuleManager_AddSlave(next_address);
+				ModuleManager_AddSlave(next_address, node_mode);
 				slave_count++;
 				next_address++;  // Move on to the next address.
 			}
@@ -664,6 +701,41 @@ bool enumerate_slaves()
 
     return bRet;
 
+}
+
+// Phase 2: broadcast OW_CMD_CLEAR_CONFIG down the chain. Each *configured* node
+// relays it downstream (in comms_onewire_check_received) and then drops its own
+// enumeration state, returning to the "waiting for discovery" state. This gives a
+// clean slate before an enumeration walk and fixes the master-reboot desync where
+// stale slaves relay discovery instead of re-claiming an address.
+void clear_chain_config(void)
+{
+    memset((void*)&ow_send_packet, 0, sizeof(ow_send_packet));
+    ow_send_packet.packet_type = OW_ONE_WIRE;
+    ow_send_packet.command = OW_CMD_CLEAR_CONFIG;
+    ow_send_packet.reserved = 0;
+    ow_send_packet.addr = 0;
+
+    if (comms_callout_onewire_send(&ow_send_packet))
+    {
+        // Drain the propagated response so the half-duplex bus returns to idle.
+        // The value is irrelevant (OW_TIMEOUT from the terminal node is expected);
+        // clearing is idempotent and best-effort.
+        comms_callout_onewire_receive(&ow_receive_packet);
+    }
+}
+
+// Phase 2: master-only on-demand re-enumeration. Resets the local module table,
+// clears stale state on every downstream node, waits for them to re-ready, then
+// re-runs the discovery walk. Returns the resulting module count (incl. master).
+uint8_t master_reenumerate(void)
+{
+    ModuleManager_RegisterMaster(0x00);   // collapse table back to just the master
+    // Idempotent discovery walk: configured slaves re-confirm their module_id and
+    // keep their I2C address (no teardown); fresh nodes (incl. bootloader-mode)
+    // claim a new address. Robust against master-only reboots and repeated calls.
+    enumerate_slaves();                   // (re)assignment (0x20, 0x21, ... + modes)
+    return get_module_count();
 }
 
 // Callback functions

@@ -27,6 +27,14 @@ void comms_handle_ow_CallIn_TxCpltCallback(UART_HandleTypeDef *huart);
 
 bool enumerate_slaves(void);
 
+// Phase 2: broadcast OW_CMD_CLEAR_CONFIG down the chain so every node drops its
+// stale enumeration state before a (re-)enumeration walk. Fixes master-reboot desync.
+void clear_chain_config(void);
+
+// Phase 2: master-only on-demand re-enumeration (clear-config + discovery walk).
+// Returns the resulting module count (including the master).
+uint8_t master_reenumerate(void);
+
 void CDC_handle_TxCpltCallback();
 
 bool configure_master();

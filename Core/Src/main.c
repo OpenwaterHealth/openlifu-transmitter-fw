@@ -63,7 +63,7 @@ _Static_assert(TX_OVERHEAT_HYSTERESIS <= TX_OVERHEAT_TRIP_POINT,
                "TX_OVERHEAT_HYSTERESIS must not exceed TX_OVERHEAT_TRIP_POINT");
 
 #define BL_BKP_SIGNATURE (0x4F57424CU)     /* 'OWBL' */
-#define BL_BKP_REQ_DFU_MAGIC (0x21554644U) /* 'DFU!' */
+#define BL_BKP_REQ_DFU_MAGIC (0xB007C0DEU) /* "BOOT CODE" — SBSFU bootloader DFU request, RTC->BKP7R */
 
 /* STM32L4 system-memory (ROM) bootloader entry point */
 #define STM32_SYS_BL_ADDR   (0x1FFF0000U)
@@ -104,6 +104,10 @@ void bootloader_mark_boot_ok(void)
   RTC->BKP0R = BL_BKP_SIGNATURE;
   RTC->BKP2R = 0U; /* clears in-progress/force bits + failure count */
   RTC->BKP3R = 0U; /* clears last-bad-fw marker */
+  /* SBSFU secure bootloader failsafe boot counter: the bootloader increments
+   * BKP6R before every launch and falls back to DFU after 3 attempts that
+   * were not confirmed. Clearing it here confirms this boot succeeded. */
+  RTC->BKP6R = 0U;
   __DSB();
   __ISB();
 }
@@ -604,6 +608,11 @@ int main(void)
       {
         WaitForAllSlavesReady();
         FW_DEBUG("All slaves ready\r\n");
+        // Phase 2: the discovery walk is idempotent — a slave already configured
+        // for a given module_id simply re-confirms it (keeping its I2C address),
+        // while fresh nodes (including bootloader-mode nodes) claim a new address.
+        // So a master-only reboot with slaves left configured re-enumerates cleanly
+        // with no teardown/re-arm race, and no stale addresses to clear first.
         enumerate_slaves();
         FW_DEBUG("Slaves enumerated\r\n");
         set_configured(true);
@@ -643,6 +652,20 @@ int main(void)
       {
         comms_onewire_check_received();
         I2C_Process();
+        // Self-heal: if we are enumerated but our I2C slave peripheral got disabled
+        // OR is listening on the wrong own-address (a BERR from a bus wedge de-inits
+        // it and can lose OwnAddress1), re-init it at our assigned address so the
+        // master's forwarded reads work once it has recovered the bus. No-op while
+        // healthy (PE set and OA1 == our address).
+        if (get_configured() && get_slave_addres() >= 0x20)
+        {
+          uint32_t pe   = GLOBAL_I2C_DEVICE->Instance->CR1 & I2C_CR1_PE;
+          uint8_t  oa1  = (uint8_t)((GLOBAL_I2C_DEVICE->Instance->OAR1 >> 1) & 0x7FU);
+          if (pe == 0U || oa1 != get_slave_addres())
+          {
+            I2C_Slave_Init(get_slave_addres());
+          }
+        }
       }
     }
 
@@ -1561,11 +1584,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : RST_Pin */
+  /*Configure GPIO pin : RST_Pin (PA1) — inter-board READY line.
+   * Default it to open-drain driven LOW ("not ready") from the first GPIO
+   * setup, before the USB role is known. The secure bootloader also holds this
+   * line LOW while it runs, so defaulting it LOW here means there is no window
+   * where the line floats HIGH between the bootloader releasing it and
+   * ConfigureResetPin()/configure_slave() taking over — which would let the
+   * master enumerate this board before it is actually ready. ConfigureResetPin()
+   * later switches it to input-pullup on the master (the reader) or keeps it
+   * open-drain on a slave (released to Hi-Z = ready once configure_slave()
+   * completes). */
   GPIO_InitStruct.Pin = RST_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RST_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(RST_GPIO_Port, RST_Pin, GPIO_PIN_RESET); /* LOW = not ready */
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -1634,10 +1668,12 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
     {
       if (is_custom_bootloader_present() && _force_stm32_dfu == false)
       {
-        /* Custom bootloader present — request DFU via backup register and reset */
+        /* SBSFU secure bootloader present — request DFU mode by writing the
+         * one-shot magic to RTC->BKP7R and resetting. The bootloader consumes
+         * the magic, skips launching the application, and enters DFU (USB
+         * DfuSe when a host is attached, otherwise I2C slave at 0x72). */
         bl_bkp_enable();
-        RTC->BKP0R = BL_BKP_SIGNATURE;
-        RTC->BKP1R = BL_BKP_REQ_DFU_MAGIC;
+        RTC->BKP7R = BL_BKP_REQ_DFU_MAGIC;
       }
       else
       {

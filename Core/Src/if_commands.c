@@ -9,6 +9,7 @@
 #include "if_commands.h"
 #include "common.h"
 #include "module_manager.h"
+#include "uart_comms.h"
 #include "i2c_master.h"
 #include "i2c_slave.h"
 #include "i2c_protocol.h"
@@ -33,6 +34,8 @@ extern bool async_enabled;
 static uint32_t id_words[3] = {0};
 static char retTriggerJson[0xFF];
 static uint8_t module_count = 0;
+static uint8_t node_mode_byte = NODE_MODE_APP;   // this node runs application firmware
+static uint8_t module_mode_byte = 0;             // scratch for OW_CTRL_GET_MODULE_MODE reply
 
 uint8_t send_buff[I2C_BUFFER_SIZE] = {0};
 uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
@@ -246,17 +249,45 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 				break;
 			}
 
-			if(get_configured() && get_module_ID() != 0) {
-				// relay to next slave if it exists
-				printf("discovery timeout\r\n");
+			// Idempotent (re)claim. Three cases:
+			//   - unconfigured                         -> claim this address.
+			//   - configured, discovery for OUR id     -> re-confirm (keep address,
+			//        adopt the master's address if it somehow changed).
+			//   - configured, discovery for another id -> we could not relay it
+			//        (no downstream) -> tell the master the chain ended.
+			// This lets a master reboot re-enumerate a still-configured chain with
+			// no teardown: each slave just re-affirms its existing position.
+			if(get_configured() && get_module_ID() != 0 && cmd->reserved != get_module_ID()) {
 				uartResp->packet_type = OW_TIMEOUT;
 				break;
 			}
 
+			if(get_configured() && get_slave_addres() != cmd->addr) {
+				// Rare: re-claim with a changed address -> move the I2C listener now
+				// (the boot inner-loop only (re)inits I2C while unconfigured).
+				set_slave_address(cmd->addr);
+				I2C_Slave_Init(cmd->addr);
+			} else {
+				set_slave_address(cmd->addr);
+			}
 			set_configured(true);
 			set_module_ID(cmd->reserved);
-			set_slave_address(cmd->addr);
-			break;		
+			// Report our operating mode (application firmware) so the master can
+			// tell app nodes from bootloader nodes during enumeration.
+			uartResp->data_len = 1;
+			uartResp->data = &node_mode_byte;
+			break;
+		case OW_CMD_CLEAR_CONFIG:
+			// Drop any stale enumeration state so the master can re-assign a fresh
+			// I2C address. Configured nodes relay + clear in comms_onewire_check_received;
+			// reaching here means we are an unconfigured (or terminal) node -> just ACK.
+			uartResp->id = cmd->id;
+			uartResp->command = cmd->command;
+			set_configured(false);
+			set_module_ID(0);
+			set_slave_address(0);
+			uartResp->data_len = 0;
+			break;
         case OW_CMD_USR_CFG:
             // reserved == 0: READ
             // reserved == 1: WRITE (cmd->data is JSON text)
@@ -537,7 +568,31 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}else{
                 uartResp->packet_type = OW_ERROR;
                 uartResp->data_len = 0;
-                uartResp->data = NULL;				
+                uartResp->data = NULL;
+			}
+			break;
+		case OW_CTRL_GET_MODULE_MODE:
+			// addr = module index (validated < module_count at function entry).
+			// Returns the NodeMode (app vs bootloader) recorded during enumeration.
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			module_mode_byte = ModuleManager_GetModuleMode(module_id);
+			uartResp->data_len = 1;
+			uartResp->data = &module_mode_byte;
+			break;
+		case OW_CTRL_ENUMERATE:
+			// Master-only: re-run the robust enumeration (clear-config broadcast +
+			// discovery walk) on demand, then return the new module count.
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			if (module_id == 0){
+				module_count = master_reenumerate();
+				uartResp->data_len = 1;
+				uartResp->data = (uint8_t *)&module_count;
+			}else{
+				uartResp->packet_type = OW_ERROR;
+				uartResp->data_len = 0;
+				uartResp->data = NULL;
 			}
 			break;
         case OW_CMD_USR_CFG:

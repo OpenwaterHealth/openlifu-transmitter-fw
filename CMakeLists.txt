@@ -81,7 +81,7 @@ enable_language(C ASM)
 option(BOOTLOADER_BUILD "Build firmware to run with bootloader (FLASH @ 0x08010000)" OFF)
 
 if(BOOTLOADER_BUILD)
-    message(STATUS "Bootloader build : FLASH origin=0x08010000, LENGTH=190K, VTOR=0x08010000")
+    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=187K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld")
 else()
     message(STATUS "Standalone build : FLASH origin=0x08000000, LENGTH=256K")

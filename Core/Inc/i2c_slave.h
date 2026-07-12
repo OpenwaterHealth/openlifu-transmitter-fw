@@ -24,6 +24,8 @@ typedef enum {
 
 void i2c_print_info();
 void I2C_Slave_Init(uint8_t addr);
+void I2C_Slave_DeInit(void);
+void I2C_BusRecovery(I2C_HandleTypeDef *hi2c);
 void I2C_Process();
 bool set_transmit_buffer(I2C_TX_Packet* packet);
 

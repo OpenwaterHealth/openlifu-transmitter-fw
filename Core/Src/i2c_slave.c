@@ -47,6 +47,12 @@ __IO int countError = 0;
 
 void I2C_Slave_Init(uint8_t addr) {
 
+  // DeInit/Init cycle so the new OwnAddress1 is programmed from a known-clean
+  // state. Without this, re-arming after a clear-config could leave the old
+  // address active (two nodes answering the same address) or a half-configured
+  // peripheral, which manifested as forwarded reads failing after re-enumeration.
+  HAL_I2C_DeInit(GLOBAL_I2C_DEVICE);
+
   if(addr == 0x00 || addr > 0x7F){
 	  GLOBAL_I2C_DEVICE->Init.OwnAddress1  = 0x32 << 1;  // default to 32
   }else{
@@ -76,6 +82,68 @@ void I2C_Slave_Init(uint8_t addr) {
 	  Error_Handler();
   }
 
+}
+
+// Stop answering on the I2C slave bus. Called when a slave drops its enumeration
+// state (clear-config) so a stale OwnAddress1 does not linger and collide with
+// another node before this slave is re-assigned an address.
+void I2C_Slave_DeInit(void) {
+  if (GLOBAL_I2C_DEVICE != NULL && GLOBAL_I2C_DEVICE->Instance != NULL) {
+    HAL_I2C_DisableListen_IT(GLOBAL_I2C_DEVICE);
+    HAL_I2C_DeInit(GLOBAL_I2C_DEVICE);
+  }
+}
+
+// Short (~few us) bit-bang delay for bus recovery. Precise timing is not needed;
+// a slow recovery clock is fine — the stuck slave only needs clock edges.
+static void i2c_recov_delay(void) {
+  for (volatile int i = 0; i < 300; i++) { __NOP(); }
+}
+
+// I2C bus recovery: if a slave (or a master reset mid-transaction) left SDA/SCL
+// stuck low, drive up to 9 manual SCL clock pulses to let the stuck device finish
+// its byte and release SDA, then issue a STOP. This is the standard remedy for a
+// wedged I2C bus after a master-only reboot (the shared inter-board bus otherwise
+// stays held low and every forwarded transaction fails). Restores I2C AF + re-init.
+void I2C_BusRecovery(I2C_HandleTypeDef *hi2c) {
+  if (hi2c == NULL || hi2c->Instance == NULL) { return; }
+
+  GPIO_TypeDef *port;
+  uint16_t scl_pin, sda_pin;
+  if (hi2c->Instance == I2C1) {
+    port = GLOBAL_SCL_GPIO_Port; scl_pin = GLOBAL_SCL_Pin; sda_pin = GLOBAL_SDA_Pin;   /* PB6/PB7 */
+  } else if (hi2c->Instance == I2C2) {
+    port = LOCAL_SCL_GPIO_Port;  scl_pin = LOCAL_SCL_Pin;  sda_pin = LOCAL_SDA_Pin;    /* PB10/PB11 */
+  } else {
+    return;
+  }
+
+  HAL_I2C_DeInit(hi2c);   /* release AF control of the pins */
+
+  GPIO_InitTypeDef g = {0};
+  g.Mode  = GPIO_MODE_OUTPUT_OD;
+  g.Pull  = GPIO_PULLUP;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  g.Pin   = scl_pin | sda_pin;
+  HAL_GPIO_Init(port, &g);
+
+  HAL_GPIO_WritePin(port, scl_pin | sda_pin, GPIO_PIN_SET);  /* idle high */
+  i2c_recov_delay();
+
+  /* Clock out a stuck slave: up to 9 SCL pulses until SDA is released high. */
+  for (int i = 0; i < 9; i++) {
+    if (HAL_GPIO_ReadPin(port, sda_pin) == GPIO_PIN_SET) { break; }
+    HAL_GPIO_WritePin(port, scl_pin, GPIO_PIN_RESET); i2c_recov_delay();
+    HAL_GPIO_WritePin(port, scl_pin, GPIO_PIN_SET);   i2c_recov_delay();
+  }
+
+  /* Generate a STOP: SDA low while SCL high, then SDA high. */
+  HAL_GPIO_WritePin(port, sda_pin, GPIO_PIN_RESET); i2c_recov_delay();
+  HAL_GPIO_WritePin(port, scl_pin, GPIO_PIN_SET);   i2c_recov_delay();
+  HAL_GPIO_WritePin(port, sda_pin, GPIO_PIN_SET);   i2c_recov_delay();
+
+  /* Restore the peripheral (HAL_I2C_Init re-runs MspInit -> pins back to I2C AF). */
+  HAL_I2C_Init(hi2c);
 }
 
 void i2c_print_info() {
