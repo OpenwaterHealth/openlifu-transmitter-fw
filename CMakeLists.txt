@@ -75,17 +75,22 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
-# Bootloader build option
-# When ON : FLASH origin=0x08010000, LENGTH=190K, VTOR offset=0x00010000 (uses STM32L443XX_FLASH.ld)
-# When OFF: FLASH origin=0x08000000, LENGTH=256K, no VTOR override   (uses STM32L443RCIX_FLASH.ld)
-option(BOOTLOADER_BUILD "Build firmware to run with bootloader (FLASH @ 0x08010000)" OFF)
+# Bare-metal build option (mirrors openlifu-console-fw):
+#   BARE_METAL=OFF (default) : image runs under the SBSFU secure bootloader from
+#                              the active slot — FLASH origin=0x08010400,
+#                              LENGTH=187K, VTOR=0x08010400 (slot + signed-header
+#                              offset; uses STM32L443XX_FLASH.ld). This is the
+#                              image that gets signed.
+#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=256K, no
+#                              bootloader (uses STM32L443RCIX_FLASH.ld).
+option(BARE_METAL "Build a bare-metal image (no bootloader; runs at 0x08000000)" OFF)
 
-if(BOOTLOADER_BUILD)
+if(BARE_METAL)
+    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=256K")
+    set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH.ld")
+else()
     message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=187K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld")
-else()
-    message(STATUS "Standalone build : FLASH origin=0x08000000, LENGTH=256K")
-    set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH.ld")
 endif()
 
 # Create an executable object type
@@ -145,7 +150,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
-    $<$<BOOL:${BOOTLOADER_BUILD}>:USER_VECT_TAB_ADDRESS>
+    $<$<NOT:$<BOOL:${BARE_METAL}>>:USER_VECT_TAB_ADDRESS>
 )
 
 # Remove wrong libob.a library dependency when using cpp files

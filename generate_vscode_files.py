@@ -210,54 +210,12 @@ EMBED_TEMPLATES = {
             }
         },
         {
-            "label": "Flash Firmware (Debug)",
-            "type": "shell",
-            "command": "${OPENOCD_PATH}",
-            "args": [
-                "-f",
-                "interface/stlink.cfg",
-                "-f",
-                "target/${STM32_TARGET}",
-                "-c",
-                "program ${BUILD_DIR}/Debug/${ELF_NAME}.hex reset exit"
-            ],
-            "group": "build",
-            "problemMatcher": [],
-            "dependsOn": [
-                "CMake: Build (Debug)"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            }
-        },
-        {
-            "label": "Flash Firmware (Release)",
-            "type": "shell",
-            "command": "${OPENOCD_PATH}",
-            "args": [
-                "-f",
-                "interface/stlink.cfg",
-                "-f",
-                "target/${STM32_TARGET}",
-                "-c",
-                "program ${BUILD_DIR}/Release/${ELF_NAME}.hex reset exit"
-            ],
-            "group": "build",
-            "problemMatcher": [],
-            "dependsOn": [
-                "CMake: Build (Release)"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            }
-        },
-        {
-            "label": "CMake: Configure (DebugBL)",
+            "label": "CMake: Configure (Debug-BareMetal)",
             "type": "shell",
             "command": "cmake",
             "args": [
                 "--preset",
-                "DebugBL"
+                "Debug-BareMetal"
             ],
             "group": "build",
             "problemMatcher": [],
@@ -268,12 +226,12 @@ EMBED_TEMPLATES = {
             }
         },
         {
-            "label": "CMake: Build (DebugBL)",
+            "label": "CMake: Build (Debug-BareMetal)",
             "type": "shell",
             "command": "cmake",
             "args": [
                 "--build",
-                "${workspaceFolder}/${BUILD_DIR}/DebugBL",
+                "${workspaceFolder}/${BUILD_DIR}/Debug-BareMetal",
                 "--config",
                 "Debug",
                 "--target",
@@ -287,7 +245,7 @@ EMBED_TEMPLATES = {
                 "$gcc"
             ],
             "dependsOn": [
-                "CMake: Configure (DebugBL)"
+                "CMake: Configure (Debug-BareMetal)"
             ],
             "options": {
                 "env": {
@@ -296,12 +254,12 @@ EMBED_TEMPLATES = {
             }
         },
         {
-            "label": "CMake: Configure (ReleaseBL)",
+            "label": "CMake: Configure (Release-BareMetal)",
             "type": "shell",
             "command": "cmake",
             "args": [
                 "--preset",
-                "ReleaseBL"
+                "Release-BareMetal"
             ],
             "group": "build",
             "problemMatcher": [],
@@ -312,12 +270,12 @@ EMBED_TEMPLATES = {
             }
         },
         {
-            "label": "CMake: Build (ReleaseBL)",
+            "label": "CMake: Build (Release-BareMetal)",
             "type": "shell",
             "command": "cmake",
             "args": [
                 "--build",
-                "${workspaceFolder}/${BUILD_DIR}/ReleaseBL",
+                "${workspaceFolder}/${BUILD_DIR}/Release-BareMetal",
                 "--config",
                 "Release",
                 "--target",
@@ -330,12 +288,71 @@ EMBED_TEMPLATES = {
                 "$gcc"
             ],
             "dependsOn": [
-                "CMake: Configure (ReleaseBL)"
+                "CMake: Configure (Release-BareMetal)"
             ],
             "options": {
                 "env": {
                     "PATH": "${TOOLCHAIN_BIN_PATH}:${env:PATH}"
                 }
+            }
+        },
+        {
+            "label": "Flash Firmware (Debug-BareMetal)",
+            "type": "shell",
+            "command": "${OPENOCD_PATH}",
+            "args": [
+                "-f",
+                "interface/stlink.cfg",
+                "-f",
+                "target/${STM32_TARGET}",
+                "-c",
+                "program ${BUILD_DIR}/Debug-BareMetal/${ELF_NAME}.hex reset exit"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "dependsOn": [
+                "CMake: Build (Debug-BareMetal)"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "Flash Firmware (Release-BareMetal)",
+            "type": "shell",
+            "command": "${OPENOCD_PATH}",
+            "args": [
+                "-f",
+                "interface/stlink.cfg",
+                "-f",
+                "target/${STM32_TARGET}",
+                "-c",
+                "program ${BUILD_DIR}/Release-BareMetal/${ELF_NAME}.hex reset exit"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "dependsOn": [
+                "CMake: Build (Release-BareMetal)"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        }
+        ,
+        {
+            "label": "OpenOCD: Start GDB Server",
+            "type": "shell",
+            "command": "${OPENOCD_PATH}",
+            "args": [
+                "-f",
+                "interface/stlink.cfg",
+                "-f",
+                "target/${STM32_TARGET}"
+            ],
+            "isBackground": true,
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
             }
         },
         {
