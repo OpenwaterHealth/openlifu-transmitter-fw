@@ -27,9 +27,12 @@ typedef enum {
 typedef enum {
 	AUTO_CYCLE_IDLE = 0,
 	AUTO_CYCLE_RUNNING = 1,
-	AUTO_CYCLE_PENDING_APPLY = 2,
-	AUTO_CYCLE_ERROR = 3
+	AUTO_CYCLE_ERROR = 2
 } AutoCycleState_e;
+
+// Minimum inter-pulse dead time (µs) required for profile switching SPI writes.
+// If (1/freq - pulse_width) < this value, auto-cycle rejects the configuration.
+#define MIN_PROFILE_SWITCH_US 200U
 
 typedef struct {
     uint32_t TriggerFrequencyHz;
@@ -47,11 +50,8 @@ typedef struct {
 typedef struct {
 	AutoCycleState_e state;              // Current state of auto-cycle state machine
 	bool is_active;                      // Is auto-cycle enabled for current trigger sequence
-	uint32_t cycles_completed;           // Number of complete profile cycles executed
-	uint32_t cycles_remaining;           // Number of cycles left to run (decrements each completion)
-	uint8_t current_profile;             // Profile executed in current/last cycle
-	uint8_t next_profile;                // Profile to apply next
-	volatile bool apply_pending;         // Flag set by callback, serviced by main loop
+	uint32_t pulses_per_profile;         // Number of consecutive pulses per profile slot
+	uint32_t pulse_counter_in_profile;   // Counts pulses within current profile slot
 } AutoCycleContext_t;
 
 extern volatile uint8_t _running;
@@ -60,6 +60,7 @@ extern volatile uint8_t _running;
 void deinit_trigger(void);
 void init_trigger_pulse(OW_TimerData _timerDataConfig);
 uint8_t get_trigger_status(void);
+uint32_t get_trigger_pulse_count(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
@@ -72,14 +73,11 @@ void TRIG_TIM1_IRQHandler(void);
 void print_OW_TimerData(const OW_TimerData *data);
 
 // ========== AUTO-CYCLE API ==========
-// Start auto-cycle mode for a trigger sequence (called when cycle list is configured)
-void auto_cycle_start(uint32_t total_cycles);
+// Start pulse-level auto-cycle mode. pulses_per_profile = pulse_count / n_profiles.
+void auto_cycle_start(uint32_t pulses_per_profile);
 
 // Stop auto-cycle mode (called on stop or error)
 void auto_cycle_stop(void);
-
-// Service routine - called from main loop to handle deferred profile apply
-void auto_cycle_service(void);
 
 // Check if auto-cycle is currently active
 bool auto_cycle_is_active(void);
@@ -87,11 +85,8 @@ bool auto_cycle_is_active(void);
 // Get current auto-cycle state
 AutoCycleState_e auto_cycle_get_state(void);
 
-// Get cycles remaining
-uint32_t auto_cycle_get_remaining_cycles(void);
-
-// Request next profile apply (called from trigger callbacks)
-void auto_cycle_request_profile_apply(void);
+// Reset the pulse counter within a profile slot (called at pulse train boundaries)
+void auto_cycle_reset_pulse_counter(void);
 
 // Weak callback functions
 __weak void pulse_complete_callback(uint32_t curr_count, uint32_t total_count);

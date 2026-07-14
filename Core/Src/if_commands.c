@@ -42,29 +42,6 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-#define AUTO_CYCLE_DEBUG_RUN_UNTIL_STOP UINT32_MAX
-
-
-
-static const uint8_t apodization_channel_order_reversed[TX_APOD_CHANNELS_PER_CHIP] = {
-	16U, 14U, 12U, 10U, 8U, 6U, 4U, 2U,
-	15U, 13U, 11U, 9U, 7U, 5U, 3U, 1U,
-	32U, 30U, 28U, 26U, 24U, 22U, 20U, 18U,
-	31U, 29U, 27U, 25U, 23U, 21U, 19U, 17U
-};
-
-// Match SDK packing: lsb is the index of channel number in APODIZATION_CHANNEL_ORDER_REVERSED.
-static uint8_t apodization_lsb_for_channel(uint8_t channel_1based)
-{
-	for (uint8_t lsb = 0U; lsb < TX_APOD_CHANNELS_PER_CHIP; lsb++) {
-		if (apodization_channel_order_reversed[lsb] == channel_1based) {
-			return lsb;
-		}
-	}
-
-	return 0U;
-}
-
 // Delay profile RAM starts at 0x20 (16 regs/profile), pattern RAM starts at 0x120 (4 regs/profile).
 #define TX7332_DELAY_DATA_START       0x20U
 #define TX7332_DELAY_DATA_END         0x11FU
@@ -125,6 +102,7 @@ static bool IsValidDelayProfile(uint8_t profile)
 }
 
 // currently only doing pattern profiles
+__attribute__((unused))
 static bool ExtractUnifiedProfile(uint32_t delay_select_reg,
 								  uint32_t pattern_sel_g1,
 								  uint32_t pattern_sel_g2,
@@ -186,6 +164,7 @@ static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_ad
  * Initialize the profile cycle configuration.
  * Called once at startup to prepare the auto-cycling infrastructure.
  */
+__attribute__((unused))
 static void init_profile_cycle_config(void)
 {
 	profile_cycle.profile_count = 0;
@@ -218,7 +197,7 @@ static uint8_t get_next_profile_in_cycle(void)
 /**
  * apply_next_profile_in_cycle()
  * 
- * Called from auto_cycle_service (main loop context, safe for SPI writes).
+ * Called from ISR context (TRIG_TIM1_IRQHandler) at pulse boundaries.
  * This applies the next profile in the cycle to all configured TX chips:
  * 1. Get next profile index from execution_order
  * 2. Apply delay profile to all TX chips
@@ -231,16 +210,13 @@ static uint8_t get_next_profile_in_cycle(void)
 bool apply_next_profile_in_cycle(void)
 {
 	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {
-		printf("[APPLY_PROFILE] ERROR: Cycle not configured\r\n");
 		return false;
 	}
 
 	// Get the next profile to apply
 	uint8_t next_profile = get_next_profile_in_cycle();
-	printf("[APPLY_PROFILE] Applying profile %u\r\n", next_profile);
 
 	if (!IsValidDelayProfile(next_profile) || !IsValidPatternProfile(next_profile)) {
-		printf("[APPLY_PROFILE] ERROR: Invalid profile %u\r\n", next_profile);
 		return false;
 	}
 
@@ -258,8 +234,19 @@ bool apply_next_profile_in_cycle(void)
 		TX7332_LoadProfile(&transmitters[txi]);
 	}
 
-	printf("[APPLY_PROFILE] Profile %u applied successfully\r\n", next_profile);
 	return true;
+}
+
+/**
+ * Reset the profile cycle to the beginning and apply the first profile.
+ * Called at pulse train boundaries so each train independently cycles all profiles.
+ */
+void reset_profile_cycle_to_start(void)
+{
+	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) return;
+
+	profile_cycle.current_exec_index = 0;
+	apply_next_profile_in_cycle();
 }
 
 /**
@@ -720,16 +707,29 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			
 			// Check if auto-cycle should be enabled
 			if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
-				// Debug mode: apply the first profile immediately, then keep cycling until STOP.
-				printf("[START_TRIGGER] Auto-cycle debug mode: looping until stop\r\n");
+				// Validate: pulse_count must be divisible by number of profiles
+				uint32_t pulse_count = get_trigger_pulse_count();
+				uint8_t n_profiles = profile_cycle.exec_order_len;
+
+				if (pulse_count == 0 || (pulse_count % n_profiles) != 0) {
+					printf("[AUTO_CYCLE] ERROR: pulse_count %lu not divisible by %u profiles\r\n",
+					       pulse_count, n_profiles);
+					uartResp->packet_type = OW_ERROR;
+					break;
+				}
+
+				uint32_t pulses_per_profile = pulse_count / n_profiles;
+
+				// Apply the first profile immediately before starting
 				profile_cycle.current_exec_index = 0;
 				if (!apply_next_profile_in_cycle()) {
 					uartResp->packet_type = OW_ERROR;
 					break;
 				}
 
-				extern void auto_cycle_start(uint32_t total_cycles);
-				auto_cycle_start(AUTO_CYCLE_DEBUG_RUN_UNTIL_STOP);
+				// Start pulse-level auto-cycle
+				extern void auto_cycle_start(uint32_t pulses_per_profile);
+				auto_cycle_start(pulses_per_profile);
 				
 				if(start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
 					uartResp->packet_type = OW_ERROR;
@@ -738,7 +738,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				}
 			} else {
 				// Normal mode: single trigger sequence
-				printf("[START_TRIGGER] Normal mode\r\n");
 				if(!tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
 					uartResp->packet_type = OW_ERROR;
 				}
@@ -757,7 +756,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Stop auto-cycle if active
 			extern bool auto_cycle_is_active(void);
 			if (auto_cycle_is_active()) {
-				printf("[STOP_TRIGGER] Stopping auto-cycle\r\n");
 				extern void auto_cycle_stop(void);
 				auto_cycle_stop();
 			}
@@ -960,13 +958,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = async_enabled?1:0;
 			uartResp->data_len = 0;
 			break;
-
-
-
-
-		////////////////////////////////////////////////////////////////////////////////////////
-		////////////////////////////////////////////////////////////////////////////////////////
-		////////////////////////////////////////////////////////////////////////////////////////
 		case OW_CTRL_SET_PATTERN_PROFILE:
 		{
 			uartResp->command = cmd->command;
@@ -985,19 +976,12 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			// Keep TR_SW_DEL timing fields intact while updating delay profile selectors.
-			// uint32_t delay_select_reg = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER); // why do we need to read this first?
-			// delay_select_reg = BuildDelayProfileSelectValue(delay_select_reg, profile);
-			// TX7332_WriteReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER, delay_select_reg);
-
 			// Pattern profile selector is 0-based in the TX7332 register.\n			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 
 			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
 			TX7332_LoadProfile(&transmitters[cmd->addr]);
 
-			// Keep the active apodization row aligned with the selected delay profile.
-			// apply_profile_apodization(cmd->addr, profile); //need to move to the set delay portion
 			break;
 		}
 		case OW_CTRL_GET_PATTERN_PROFILE:
@@ -1012,7 +996,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			// uint32_t delay_select_reg = TX7332_ReadReg(&transmitters[cmd->addr], DELAY_PROFILE_SELECT_REGISTER);
 			uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1);
 			uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2);
 
@@ -1029,15 +1012,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 			uartResp->data = &selected_profile_response;
 
-			// if (!ExtractUnifiedProfile(DELAY_PROFILE_SELECT_REGISTER, pattern_sel_g1, pattern_sel_g2, &selected_profile_response)) {
-			// 	uartResp->packet_type = OW_ERROR;
-			// 	return;
-			// }
-
-			// uartResp->data = &selected_profile_response;
 			break;
 		}
-
 		case OW_CTRL_SET_DELAY_PROFILE:
 		{
 			uartResp->command = cmd->command;
@@ -1064,11 +1040,9 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			for (uint8_t i = 0; i < get_tx_chip_count(); i++) {
 				TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
 			}
-			// TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr]);
 
 			break;
 		}
-
 		case OW_CTRL_GET_DELAY_PROFILE:
 		{
 			uartResp->command = cmd->command;
@@ -1096,15 +1070,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->data = &selected_profile_response;
 			break;
 		}
-
-
-		////////////////////////////////////////////////////////////////////////////////////////
-		////////////////////////////////////////////////////////////////////////////////////////
-		////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-
 		case OW_CTRL_SET_PROFILE_CYCLE:
 		{
 			/**
@@ -1129,7 +1094,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Gating: Prevent cycle config changes while auto-cycle is running
 			extern bool auto_cycle_is_active(void);
 			if (auto_cycle_is_active()) {
-				printf("[SET_PROFILE_CYCLE] ERROR: Cannot configure cycle while auto-cycle is active\r\n");
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}

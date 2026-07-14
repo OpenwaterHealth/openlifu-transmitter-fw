@@ -28,11 +28,8 @@ static volatile OW_TimerData _timerDataConfig = {
 static AutoCycleContext_t _auto_cycle = {
 	.state = AUTO_CYCLE_IDLE,
 	.is_active = false,
-	.cycles_completed = 0,
-	.cycles_remaining = 0,
-	.current_profile = 0,
-	.next_profile = 0,
-	.apply_pending = false,
+	.pulses_per_profile = 0,
+	.pulse_counter_in_profile = 0,
 };
 
 
@@ -374,6 +371,11 @@ uint8_t get_trigger_status(void)
 	return (uint8_t)_timerDataConfig.TriggerStatus;
 }
 
+uint32_t get_trigger_pulse_count(void)
+{
+	return _timerDataConfig.TriggerPulseCount;
+}
+
 uint8_t start_trigger_pulse(void) {
     if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY) return _timerDataConfig.TriggerStatus;
 
@@ -385,6 +387,17 @@ uint8_t start_trigger_pulse(void) {
     if (_timerDataConfig.TriggerPulseWidthUsec >= triggerPeriodUsec) {
         _timerDataConfig.TriggerStatus = TRIGGER_STATUS_ERROR;
         return TRIGGER_STATUS_ERROR;
+    }
+
+    // Validate: If auto-cycle is active, inter-pulse dead time must be sufficient for SPI writes
+    if (_auto_cycle.is_active) {
+        uint32_t dead_time_us = triggerPeriodUsec - _timerDataConfig.TriggerPulseWidthUsec;
+        if (dead_time_us < MIN_PROFILE_SWITCH_US) {
+            printf("[AUTO_CYCLE] ERROR: inter-pulse dead time %lu us < minimum %u us\r\n",
+                   dead_time_us, MIN_PROFILE_SWITCH_US);
+            _timerDataConfig.TriggerStatus = TRIGGER_STATUS_ERROR;
+            return TRIGGER_STATUS_ERROR;
+        }
     }
 
     // Validate: Pulse train interval must be 0 or large enough to contain the full pulse train
@@ -456,6 +469,14 @@ void TRIG_TIM2_IRQHandler(void) {
         sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount );
 	}else{
 	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
+
+	    // Reset pulse-level profile cycling for the new pulse train
+	    if (_auto_cycle.is_active) {
+	        extern void reset_profile_cycle_to_start(void);
+	        reset_profile_cycle_to_start();
+	        _auto_cycle.pulse_counter_in_profile = 0;
+	    }
+
 	    _pulseCount = 0;
 	    HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
 	    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
@@ -472,6 +493,23 @@ void TRIG_TIM1_IRQHandler(void) {
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return;
 
     _pulseCount++;
+
+    // ========== PULSE-LEVEL PROFILE SWITCHING ==========
+    // The current pulse has already fired (TX7332 latched the profile on the
+    // hardware trigger edge). We now switch to the next profile so it's ready
+    // before the next LORES_TIMER tick. Available time = (1/freq - pulse_width).
+    if (_auto_cycle.is_active) {
+        _auto_cycle.pulse_counter_in_profile++;
+        if (_auto_cycle.pulse_counter_in_profile >= _auto_cycle.pulses_per_profile
+            && _pulseCount < _timerDataConfig.TriggerPulseCount) {
+            _auto_cycle.pulse_counter_in_profile = 0;
+            extern bool apply_next_profile_in_cycle(void);
+            if (!apply_next_profile_in_cycle()) {
+                _auto_cycle.state = AUTO_CYCLE_ERROR;
+                _auto_cycle.is_active = false;
+            }
+        }
+    }
 
 	if(_timerDataConfig.TriggerPulseTrainInterval == 0 && _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS){
 		// do anything needed here
@@ -497,6 +535,14 @@ void TRIG_TIM1_IRQHandler(void) {
 				}
 				HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
 				_pulseCount = 0;
+
+				// Reset pulse-level profile cycling for the new pulse train
+				if (_auto_cycle.is_active) {
+				    extern void reset_profile_cycle_to_start(void);
+				    reset_profile_cycle_to_start();
+				    _auto_cycle.pulse_counter_in_profile = 0;
+				}
+
 				HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
 				__HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
 				HAL_TIM_Base_Start_IT(&LORES_TIMER);
@@ -510,22 +556,20 @@ void TRIG_TIM1_IRQHandler(void) {
 
 // ========== AUTO-CYCLE IMPLEMENTATION ==========
 
-void auto_cycle_start(uint32_t total_cycles)
+void auto_cycle_start(uint32_t pulses_per_profile)
 {
 	_auto_cycle.state = AUTO_CYCLE_RUNNING;
 	_auto_cycle.is_active = true;
-	_auto_cycle.cycles_completed = 0;
-	_auto_cycle.cycles_remaining = total_cycles;
-	_auto_cycle.apply_pending = false;
-	printf("[AUTO_CYCLE] Started: %lu cycles\r\n", total_cycles);
+	_auto_cycle.pulses_per_profile = pulses_per_profile;
+	_auto_cycle.pulse_counter_in_profile = 0;
+	printf("[AUTO_CYCLE] Started: %lu pulses per profile\r\n", pulses_per_profile);
 }
 
 void auto_cycle_stop(void)
 {
 	_auto_cycle.state = AUTO_CYCLE_IDLE;
 	_auto_cycle.is_active = false;
-	_auto_cycle.cycles_remaining = 0;
-	_auto_cycle.apply_pending = false;
+	_auto_cycle.pulse_counter_in_profile = 0;
 	printf("[AUTO_CYCLE] Stopped\r\n");
 }
 
@@ -539,61 +583,7 @@ AutoCycleState_e auto_cycle_get_state(void)
 	return _auto_cycle.state;
 }
 
-uint32_t auto_cycle_get_remaining_cycles(void)
+void auto_cycle_reset_pulse_counter(void)
 {
-	return _auto_cycle.cycles_remaining;
-}
-
-void auto_cycle_request_profile_apply(void)
-{
-	// Called from ISR/callback context immediately after trigger sequence completes.
-	// The trigger is already stopped, so SPI writes are safe here — no timing-critical
-	// interrupts to block. This ensures the profile switch happens on the falling edge
-	// of the trigger signal with minimal latency.
-	if (!_auto_cycle.is_active) return;
-
-	extern bool apply_next_profile_in_cycle(void);
-
-	if (!apply_next_profile_in_cycle()) {
-		_auto_cycle.state = AUTO_CYCLE_ERROR;
-		_auto_cycle.apply_pending = false;
-		_auto_cycle.is_active = false;
-		return;
-	}
-
-	// Profile applied in ISR context. Signal main loop to handle
-	// cycle counting and trigger restart.
-	_auto_cycle.state = AUTO_CYCLE_PENDING_APPLY;
-	_auto_cycle.apply_pending = true;
-}
-
-void auto_cycle_service(void)
-{
-	// Called from main loop. Profile SPI writes already happened in the
-	// ISR callback (auto_cycle_request_profile_apply). This function
-	// handles cycle counting and trigger restart.
-	
-	if (!_auto_cycle.is_active) return;
-	if (!_auto_cycle.apply_pending) return;
-	if (_auto_cycle.state != AUTO_CYCLE_PENDING_APPLY) return;
-	
-	// Profile was already applied in ISR context. Update counters.
-	_auto_cycle.cycles_completed++;
-	_auto_cycle.cycles_remaining--;
-	_auto_cycle.apply_pending = false;
-	
-	// Check if we're done
-	if (_auto_cycle.cycles_remaining == 0) {
-		_auto_cycle.state = AUTO_CYCLE_IDLE;
-		_auto_cycle.is_active = false;
-		return;
-	}
-	
-	// Restart trigger for next cycle
-	_auto_cycle.state = AUTO_CYCLE_RUNNING;
-	if (start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
-		_auto_cycle.state = AUTO_CYCLE_ERROR;
-		auto_cycle_stop();
-		return;
-	}
+	_auto_cycle.pulse_counter_in_profile = 0;
 }
