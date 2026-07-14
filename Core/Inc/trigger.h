@@ -32,7 +32,8 @@ typedef enum {
 
 // Minimum inter-pulse dead time (µs) required for profile switching SPI writes.
 // If (1/freq - pulse_width) < this value, auto-cycle rejects the configuration.
-#define MIN_PROFILE_SWITCH_US 200U
+// Measured: ~460µs at SPI prescaler /4 (12 MHz). Using 1ms for safety margin.
+#define MIN_PROFILE_SWITCH_US 1000U
 
 typedef struct {
     uint32_t TriggerFrequencyHz;
