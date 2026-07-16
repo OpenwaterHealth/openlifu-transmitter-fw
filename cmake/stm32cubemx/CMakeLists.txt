@@ -83,9 +83,6 @@ set(USB_Device_Library_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c
 )
 
-# Linker script (CubeMX default - overridden in root CMakeLists.txt for bootloader builds)
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -T \"${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld\"")
-
 # Link directories setup
 set(MX_LINK_DIRS
 
@@ -94,8 +91,7 @@ set(MX_LINK_DIRS
 set(MX_LINK_LIBS 
     STM32_Drivers
     ${TOOLCHAIN_LINK_LIBRARIES}
-    USB_Device_Library
-	
+    USB_Device_Library	
 )
 # Interface library for includes and symbols
 add_library(stm32cubemx INTERFACE)
