@@ -42,7 +42,7 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
+static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
 
 static void print_uart_packet(const UartPacket* packet) {
@@ -59,7 +59,7 @@ static void print_uart_packet(const UartPacket* packet) {
 }
 
 
-static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id)
+static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id)
 {
 	uint16_t rx_len = 0;
 	uint8_t slave_addr = ModuleManager_GetModule(module_id)->i2c_address;
@@ -103,7 +103,6 @@ static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id)
 {
 	I2C_TX_Packet send_i2c_packet;
-	uint16_t send_len = 0;
 	uint8_t slave_addr = 0;
 	int local_tx_idx = 0;
 
@@ -153,7 +152,7 @@ static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t m
 		send_i2c_packet.data_len = cmd->data_len;
 		send_i2c_packet.pData = cmd->data;
 
-		send_len = i2c_packet_toBuffer(&send_i2c_packet, send_buff);  // rebuild buffer
+		uint16_t send_len = i2c_packet_toBuffer(&send_i2c_packet, send_buff);  // rebuild buffer
 
 		if(send_buffer_to_slave_global(slave_addr, send_buff, send_len) != 0) { // send buffer to slave
 			uartResp->packet_type = OW_ERROR;

@@ -26,7 +26,7 @@ static volatile OW_TimerData _timerDataConfig = {
 
 
 
-static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
+static int jsoneq(const char *json, const jsmntok_t *tok, const char *s) {
   if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
 	   strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
 	 return 0;
@@ -58,7 +58,7 @@ static void timerDataToJson(char *jsonString, size_t max_length)
 			  _timerDataConfig.TriggerMode,
 			  _timerDataConfig.ProfileIndex,
 			  _timerDataConfig.ProfileIncrement,
-			  _trainCount,
+			  (unsigned long)_trainCount,
 			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING ? "RUNNING" : "STOPPED");
 }
 
@@ -277,7 +277,7 @@ bool get_trigger_data(char *jsonString, size_t max_length)
 	 return true;
 }
 
-bool set_trigger_data(char *jsonString, size_t str_len)
+bool set_trigger_data(const char *jsonString, size_t str_len)
 {
 	 uint8_t tempArr[255] = {0};
 	 bool ret = false;

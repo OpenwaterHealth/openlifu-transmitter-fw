@@ -46,7 +46,7 @@ uint8_t get_trigger_status(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
-bool set_trigger_data(char *jsonString, size_t str_len);
+bool set_trigger_data(const char *jsonString, size_t str_len);
 uint8_t get_trigger_mode(void);
 const char* get_trigger_mode_str(void);
 

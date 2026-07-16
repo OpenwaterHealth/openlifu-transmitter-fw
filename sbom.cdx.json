@@ -1,0 +1,165 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:ed5a984d-b647-4585-bdc0-6a3cd244ef30",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-16T00:00:00Z",
+    "authors": [
+      { "name": "Openwater Firmware Engineering" }
+    ],
+    "tools": [
+      {
+        "vendor": "Openwater",
+        "name": "curated-sbom",
+        "version": "1.0",
+        "notes": "Hand-curated CycloneDX SBOM. Component versions are traced to committed source: STM32Cube FW_L4 pack from lifu-transmitter-fw.ioc; CMSIS from cmsis_version.h / stm32l4xx.h; LwRB from Core/Src/lwrb.c; jsmn from its copyright header (the library publishes no version macro, so no version is asserted). The STM32L4xx HAL Driver and USB Device Library headers in this tree are stripped of their internal version macros, so they are pinned to the STM32Cube FW_L4 V1.18.2 pack that delivers them."
+      }
+    ],
+    "component": {
+      "bom-ref": "openwater-lifu-transmitter-fw",
+      "type": "firmware",
+      "group": "cc.openwater",
+      "name": "openlifu-transmitter-fw",
+      "version": "7883720",
+      "description": "Openwater LIFU transmitter application firmware for STM32L443: TX7332 transmit-channel configuration, trigger/pulse-train timing, AFE configuration, module manager with I2C master/slave one-wire enumeration, JSON command interface over USB CDC and UART, SBSFU bootloader hand-off.",
+      "publisher": "Openwater",
+      "licenses": [ { "license": { "id": "AGPL-3.0-only" } } ],
+      "properties": [
+        { "name": "openwater:version-source", "value": "git describe (injected at build time as FW_VERSION)" },
+        { "name": "openwater:mcu", "value": "STM32L443RCIx (Arm Cortex-M4)" }
+      ]
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "stm32cube-fw-l4",
+      "type": "framework",
+      "group": "com.st",
+      "name": "STM32Cube MCU Package for STM32L4 (FW_L4)",
+      "version": "1.18.2",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "STM32Cube firmware package delivering the STM32L4 HAL/LL drivers, CMSIS device files, and ST middleware used by this project.",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "lifu-transmitter-fw.ioc: ProjectManager.FirmwarePackage=STM32Cube FW_L4 V1.18.2" }
+      ]
+    },
+    {
+      "bom-ref": "stm32l4xx-hal-driver",
+      "type": "library",
+      "group": "com.st",
+      "name": "STM32L4xx HAL Driver",
+      "version": "1.18.2",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "Hardware abstraction layer drivers for STM32L4. Version pinned to the STM32Cube FW_L4 pack (internal HAL version macros are not present in the committed headers).",
+      "licenses": [ { "license": { "id": "BSD-3-Clause" } } ],
+      "properties": [
+        { "name": "openwater:version-basis", "value": "STM32Cube FW_L4 V1.18.2 pack" }
+      ]
+    },
+    {
+      "bom-ref": "cmsis-core",
+      "type": "library",
+      "group": "org.arm",
+      "name": "CMSIS Core (Cortex-M)",
+      "version": "5.3.0",
+      "supplier": { "name": "Arm Limited" },
+      "publisher": "Arm Limited",
+      "description": "Cortex Microcontroller Software Interface Standard core headers.",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ],
+      "purl": "pkg:github/ARM-software/CMSIS_5@5.3.0",
+      "properties": [
+        { "name": "openwater:evidence", "value": "Drivers/CMSIS/Include/cmsis_version.h: __CM_CMSIS_VERSION_MAIN=5, __CM_CMSIS_VERSION_SUB=3" }
+      ]
+    },
+    {
+      "bom-ref": "cmsis-device-stm32l4xx",
+      "type": "library",
+      "group": "com.st",
+      "name": "CMSIS Device STM32L4xx",
+      "version": "1.7.5",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "CMSIS device support (headers, startup, system) for STM32L4xx.",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "Drivers/CMSIS/Device/ST/STM32L4xx/Include/stm32l4xx.h: __STM32L4_CMSIS_VERSION 1.7.5.0" }
+      ]
+    },
+    {
+      "bom-ref": "stm32-usb-device-library",
+      "type": "library",
+      "group": "com.st",
+      "name": "STM32 USB Device Library",
+      "version": "1.18.2",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "ST USB device core plus CDC (virtual COM port) class, used for the JSON command interface. Version pinned to the STM32Cube FW_L4 pack (internal library version macros are not present in the committed headers).",
+      "licenses": [ { "license": { "name": "SLA0044 (ST Ultimate Liberty)" } } ],
+      "properties": [
+        { "name": "openwater:version-basis", "value": "STM32Cube FW_L4 V1.18.2 pack" }
+      ]
+    },
+    {
+      "bom-ref": "lwrb",
+      "type": "library",
+      "group": "eu.majerle",
+      "name": "LwRB",
+      "version": "2.0.0",
+      "supplier": { "name": "Tilen Majerle" },
+      "author": "Tilen Majerle",
+      "publisher": "Tilen Majerle",
+      "description": "Lightweight ring buffer library (Core/Src/lwrb.c).",
+      "licenses": [ { "license": { "id": "MIT" } } ],
+      "purl": "pkg:github/MaJerle/lwrb@v2.0.0",
+      "properties": [
+        { "name": "openwater:evidence", "value": "Core/Src/lwrb.c: Version: v2.0.0; compiled via CMakeLists.txt" }
+      ]
+    },
+    {
+      "bom-ref": "jsmn",
+      "type": "library",
+      "group": "com.github.zserge",
+      "name": "jsmn",
+      "supplier": { "name": "Serge A. Zaitsev" },
+      "author": "Serge A. Zaitsev",
+      "publisher": "Serge A. Zaitsev",
+      "description": "Minimalistic JSON parser (Core/Src/jsmn.c) used by the JSON command interface. The library publishes no version macro, so no version is asserted.",
+      "licenses": [ { "license": { "id": "MIT" } } ],
+      "purl": "pkg:github/zserge/jsmn",
+      "properties": [
+        { "name": "openwater:evidence", "value": "Core/Src/jsmn.c: Copyright (c) 2010 Serge A. Zaitsev, MIT license text; compiled via CMakeLists.txt" }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "openwater-lifu-transmitter-fw",
+      "dependsOn": [
+        "stm32cube-fw-l4",
+        "stm32l4xx-hal-driver",
+        "cmsis-core",
+        "cmsis-device-stm32l4xx",
+        "stm32-usb-device-library",
+        "lwrb",
+        "jsmn"
+      ]
+    },
+    {
+      "ref": "stm32cube-fw-l4",
+      "dependsOn": [
+        "stm32l4xx-hal-driver",
+        "cmsis-device-stm32l4xx",
+        "stm32-usb-device-library"
+      ]
+    },
+    { "ref": "stm32l4xx-hal-driver", "dependsOn": [ "cmsis-device-stm32l4xx" ] },
+    { "ref": "cmsis-device-stm32l4xx", "dependsOn": [ "cmsis-core" ] },
+    { "ref": "stm32-usb-device-library", "dependsOn": [ "stm32l4xx-hal-driver" ] },
+    { "ref": "lwrb", "dependsOn": [] },
+    { "ref": "jsmn", "dependsOn": [] }
+  ]
+}

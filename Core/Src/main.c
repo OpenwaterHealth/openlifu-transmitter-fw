@@ -342,7 +342,6 @@ void ConfigureHIzPin(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin)
 static bool ConfigureClock()
 {
   int count = 0;
-  uint16_t v = 0;
 
   // reset
   HAL_GPIO_WritePin(PDN_GPIO_Port, PDN_Pin, GPIO_PIN_RESET);
@@ -382,7 +381,7 @@ static bool ConfigureClock()
   for (count = 0; count < 10; count++)
   { // check for lock
     HAL_Delay(50);
-    v = I2C_read_CDCE6214_reg(0x67, 0x0007);
+    uint16_t v = I2C_read_CDCE6214_reg(0x67, 0x0007);
     if ((v & 0x01) == 0x01)
     {
       HAL_GPIO_WritePin(SYSTEM_RDY_GPIO_Port, SYSTEM_RDY_Pin, GPIO_PIN_RESET);
@@ -429,7 +428,7 @@ int main(void)
 
   uint32_t last_led_toggle_time = HAL_GetTick(); // Store the initial time
   uint32_t last_temp_toggle_time = HAL_GetTick();
-  uint32_t current_time = 0;
+  uint32_t current_time;
 
   /* USER CODE END 1 */
 
@@ -1702,6 +1701,7 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
  * @param  htim : TIM handle
  * @retval None
  */
+// cppcheck-suppress constParameterPointer -- must match the HAL weak callback signature (non-const TIM_HandleTypeDef *)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */

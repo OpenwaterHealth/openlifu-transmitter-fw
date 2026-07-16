@@ -112,7 +112,7 @@ static void buffer_to_packet(uint8_t* pBuffer, UartPacket* pPacket) {
     }
 }
 
-static void comms_interface_send(UartPacket* pResp)
+static void comms_interface_send(const UartPacket* pResp)
 {
     tx_flag = 0;  // Clear the flag before starting transmission
 
@@ -739,7 +739,7 @@ uint8_t master_reenumerate(void)
 }
 
 // Callback functions
-void comms_handle_ow_CallIn_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
+void comms_handle_ow_CallIn_RxEventCallback(const UART_HandleTypeDef *huart, uint16_t size)
 {
     if (huart->Instance == CALL_IN_UART.Instance) {
         // Notify the task
@@ -747,7 +747,7 @@ void comms_handle_ow_CallIn_RxEventCallback(UART_HandleTypeDef *huart, uint16_t 
     }
 }
 
-void comms_handle_ow_CallIn_TxCpltCallback(UART_HandleTypeDef *huart)
+void comms_handle_ow_CallIn_TxCpltCallback(const UART_HandleTypeDef *huart)
 {
     if (huart->Instance == CALL_IN_UART.Instance) {
         // Notify the task
@@ -756,7 +756,7 @@ void comms_handle_ow_CallIn_TxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 
-void comms_handle_ow_CallOut_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
+void comms_handle_ow_CallOut_RxEventCallback(const UART_HandleTypeDef *huart, uint16_t size)
 {
     if (huart->Instance == CALL_OUT_UART.Instance) {
         // Notify the task
@@ -764,7 +764,7 @@ void comms_handle_ow_CallOut_RxEventCallback(UART_HandleTypeDef *huart, uint16_t
     }
 }
 
-void comms_handle_ow_CallOut_TxCpltCallback(UART_HandleTypeDef *huart)
+void comms_handle_ow_CallOut_TxCpltCallback(const UART_HandleTypeDef *huart)
 {
     if (huart->Instance == CALL_OUT_UART.Instance) {
         // Notify the task
@@ -781,6 +781,7 @@ void CDC_handle_TxCpltCallback() {
 }
 
 
+// cppcheck-suppress constParameterPointer -- must match the HAL weak callback signature (non-const UART_HandleTypeDef *)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 
     if (huart->Instance == CALL_OUT_UART.Instance) {

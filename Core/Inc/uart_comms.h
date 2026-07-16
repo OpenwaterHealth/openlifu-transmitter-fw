@@ -19,11 +19,11 @@ bool comms_onewire_slave_start(void);
 void comms_onewire_check_received(void);
 bool comms_onewire_master_sendreceive(UartPacket* pSendPacket, UartPacket* pRetPacket);
 
-void comms_handle_ow_CallOut_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size);
-void comms_handle_ow_CallOut_TxCpltCallback(UART_HandleTypeDef *huart);
+void comms_handle_ow_CallOut_RxEventCallback(const UART_HandleTypeDef *huart, uint16_t size);
+void comms_handle_ow_CallOut_TxCpltCallback(const UART_HandleTypeDef *huart);
 
-void comms_handle_ow_CallIn_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size);
-void comms_handle_ow_CallIn_TxCpltCallback(UART_HandleTypeDef *huart);
+void comms_handle_ow_CallIn_RxEventCallback(const UART_HandleTypeDef *huart, uint16_t size);
+void comms_handle_ow_CallIn_TxCpltCallback(const UART_HandleTypeDef *huart);
 
 bool enumerate_slaves(void);
 
