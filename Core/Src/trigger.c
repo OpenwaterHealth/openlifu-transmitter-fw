@@ -305,6 +305,25 @@ bool set_trigger_data(const char *jsonString, size_t str_len)
 	 return ret;
 }
 
+// Park the trigger output as a push-pull GPIO driven low. HAL_TIM_PWM_Stop
+// clears MOE, and with OSSI disabled the TIM15 output is left high-impedance;
+// the floating line can then couple from the switching TX stage and
+// self-retrigger the TX7332. Driving it low holds the trigger inactive. The
+// next start_trigger_pulse() restores AF mode via Configure_ONESHOT_Timer().
+static void trigger_pin_park_low(void)
+{
+	 HAL_GPIO_DeInit(TRIGGER_GPIO_Port, TRIGGER_Pin);
+
+	 GPIO_InitTypeDef GPIO_InitStruct = {0};
+	 GPIO_InitStruct.Pin = TRIGGER_Pin;
+	 GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	 GPIO_InitStruct.Pull = GPIO_NOPULL;
+	 GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	 HAL_GPIO_Init(TRIGGER_GPIO_Port, &GPIO_InitStruct);
+
+	 HAL_GPIO_WritePin(TRIGGER_GPIO_Port, TRIGGER_Pin, GPIO_PIN_RESET);
+}
+
 void deinit_trigger(void)
  {
 	 /* USER CODE BEGIN TIM15_DeInit 0 */
@@ -323,19 +342,8 @@ void deinit_trigger(void)
 		 Error_Handler();
 	 }
 
-	 /* 3. Deinitialize GPIO pin used for TIM15 Channel 4 */
-	 HAL_GPIO_DeInit(TRIGGER_GPIO_Port, TRIGGER_Pin);
-
-	 /* 4. Reconfigure the GPIO pin as a general output pin */
-	 GPIO_InitTypeDef GPIO_InitStruct = {0};
-	 GPIO_InitStruct.Pin = TRIGGER_Pin;
-	 GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	 GPIO_InitStruct.Pull = GPIO_NOPULL;
-	 GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	 HAL_GPIO_Init(TRIGGER_GPIO_Port, &GPIO_InitStruct);
-
-	 /* 5. Set the pin to low */
-	 HAL_GPIO_WritePin(TRIGGER_GPIO_Port, TRIGGER_Pin, GPIO_PIN_RESET);
+	 /* 3. Park the trigger pin low (GPIO output) */
+	 trigger_pin_park_low();
 
 	 /* USER CODE BEGIN TIM15_DeInit 1 */
 
@@ -447,6 +455,8 @@ uint8_t stop_trigger_pulse(void) {
     HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
     HAL_TIM_Base_Stop_IT(&LORES_TIMER);
     HAL_TIM_Base_Stop_IT(&HIRES_TIMER);
+    // Hold the trigger line low so it can't float and self-retrigger the TX7332.
+    trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
     return TRIGGER_STATUS_READY;
 }
