@@ -1,5 +1,6 @@
 #include "trigger.h"
 #include "main.h"
+#include "if_commands.h"
 
  #include "jsmn.h"
 
@@ -24,7 +25,7 @@ static volatile OW_TimerData _timerDataConfig = {
 		.TriggerStatus = TRIGGER_STATUS_NOT_CONFIGURED
 };
 
-// ========== AUTO-CYCLE STATE MACHINE ==========
+// Auto-cycle state for pulse-level profile switching
 static AutoCycleContext_t _auto_cycle = {
 	.state = AUTO_CYCLE_IDLE,
 	.is_active = false,
@@ -401,8 +402,6 @@ uint8_t start_trigger_pulse(void) {
     if (_auto_cycle.is_active) {
         uint32_t dead_time_us = triggerPeriodUsec - _timerDataConfig.TriggerPulseWidthUsec;
         if (dead_time_us < MIN_PROFILE_SWITCH_US) {
-            printf("[AUTO_CYCLE] ERROR: inter-pulse dead time %lu us < minimum %u us\r\n",
-                   dead_time_us, MIN_PROFILE_SWITCH_US);
             _timerDataConfig.TriggerStatus = TRIGGER_STATUS_ERROR;
             return TRIGGER_STATUS_ERROR;
         }
@@ -482,7 +481,6 @@ void TRIG_TIM2_IRQHandler(void) {
 
 	    // Reset pulse-level profile cycling for the new pulse train
 	    if (_auto_cycle.is_active) {
-	        extern void reset_profile_cycle_to_start(void);
 	        reset_profile_cycle_to_start();
 	        _auto_cycle.pulse_counter_in_profile = 0;
 	    }
@@ -504,7 +502,7 @@ void TRIG_TIM1_IRQHandler(void) {
 
     _pulseCount++;
 
-    // ========== PULSE-LEVEL PROFILE SWITCHING ==========
+    // Pulse-level profile switching:
     // The current pulse has already fired (TX7332 latched the profile on the
     // hardware trigger edge). We now switch to the next profile so it's ready
     // before the next LORES_TIMER tick. Available time = (1/freq - pulse_width).
@@ -513,7 +511,6 @@ void TRIG_TIM1_IRQHandler(void) {
         if (_auto_cycle.pulse_counter_in_profile >= _auto_cycle.pulses_per_profile
             && _pulseCount < _timerDataConfig.TriggerPulseCount) {
             _auto_cycle.pulse_counter_in_profile = 0;
-            extern bool apply_next_profile_in_cycle(void);
             if (!apply_next_profile_in_cycle()) {
                 _auto_cycle.state = AUTO_CYCLE_ERROR;
                 _auto_cycle.is_active = false;
@@ -548,7 +545,6 @@ void TRIG_TIM1_IRQHandler(void) {
 
 				// Reset pulse-level profile cycling for the new pulse train
 				if (_auto_cycle.is_active) {
-				    extern void reset_profile_cycle_to_start(void);
 				    reset_profile_cycle_to_start();
 				    _auto_cycle.pulse_counter_in_profile = 0;
 				}
@@ -564,15 +560,12 @@ void TRIG_TIM1_IRQHandler(void) {
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
 }
 
-// ========== AUTO-CYCLE IMPLEMENTATION ==========
-
 void auto_cycle_start(uint32_t pulses_per_profile)
 {
 	_auto_cycle.state = AUTO_CYCLE_RUNNING;
 	_auto_cycle.is_active = true;
 	_auto_cycle.pulses_per_profile = pulses_per_profile;
 	_auto_cycle.pulse_counter_in_profile = 0;
-	printf("[AUTO_CYCLE] Started: %lu pulses per profile\r\n", pulses_per_profile);
 }
 
 void auto_cycle_stop(void)
@@ -580,7 +573,6 @@ void auto_cycle_stop(void)
 	_auto_cycle.state = AUTO_CYCLE_IDLE;
 	_auto_cycle.is_active = false;
 	_auto_cycle.pulse_counter_in_profile = 0;
-	printf("[AUTO_CYCLE] Stopped\r\n");
 }
 
 bool auto_cycle_is_active(void)

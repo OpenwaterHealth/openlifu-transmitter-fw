@@ -33,7 +33,7 @@ typedef enum {
 // Minimum inter-pulse dead time (µs) required for profile switching SPI writes.
 // If (1/freq - pulse_width) < this value, auto-cycle rejects the configuration.
 // Measured: ~460µs at SPI prescaler /4 (12 MHz). Using 1ms for safety margin.
-#define MIN_PROFILE_SWITCH_US 1000U
+#define MIN_PROFILE_SWITCH_US 1000
 
 typedef struct {
     uint32_t TriggerFrequencyHz;
@@ -73,7 +73,8 @@ void TRIG_TIM2_IRQHandler(void);
 void TRIG_TIM1_IRQHandler(void);
 void print_OW_TimerData(const OW_TimerData *data);
 
-// ========== AUTO-CYCLE API ==========
+// Auto-cycle API: pulse-level profile switching driven from the trigger ISRs.
+
 // Start pulse-level auto-cycle mode. pulses_per_profile = pulse_count / n_profiles.
 void auto_cycle_start(uint32_t pulses_per_profile);
 

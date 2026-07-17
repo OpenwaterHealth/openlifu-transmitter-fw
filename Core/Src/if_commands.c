@@ -43,92 +43,46 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 // Delay profile RAM starts at 0x20 (16 regs/profile), pattern RAM starts at 0x120 (4 regs/profile).
-#define TX7332_DELAY_DATA_START       0x20U
-#define TX7332_DELAY_DATA_END         0x11FU
-#define TX7332_PATTERN_DATA_START     0x120U
-#define TX7332_PATTERN_DATA_END       0x19FU
-#define TX7332_DELAY_PROFILE_OFFSET   16U
-#define TX7332_PATTERN_PROFILE_OFFSET 4U
+#define TX7332_DELAY_DATA_START       0x20
+#define TX7332_DELAY_DATA_END         0x11F
+#define TX7332_PATTERN_DATA_START     0x120
+#define TX7332_PATTERN_DATA_END       0x19F
+#define TX7332_DELAY_PROFILE_OFFSET   16
+#define TX7332_PATTERN_PROFILE_OFFSET 4
 
+// OW_CTRL_SET_PROFILE_CYCLE payload: [profile_count:1][n_chips:1][exec_order_len:1]
+// header, then the execution order bytes, then one little-endian uint32
+// apodization register per chip per profile.
+#define PROFILE_CYCLE_HEADER_LEN 3
+
+// Per-chip record of which delay/pattern profiles have been written, plus
+// their popcounts. Doubles as the OW_TX7332_STATUS response payload, so the
+// field order (counts first, then masks) is the wire format.
 typedef struct {
-	uint16_t delay_profiles_mask;
-	uint32_t pattern_profiles_mask;
 	uint8_t delay_profile_count;
 	uint8_t pattern_profile_count;
+	uint16_t delay_profiles_mask;
+	uint32_t pattern_profiles_mask;
 } TxProfileCache;
 
-typedef struct {
-	uint8_t delay_profile_count;
-	uint8_t pattern_profile_count;
-	uint16_t delay_profiles_mask;
-	uint32_t pattern_profiles_mask;
-} TxProfileStatus;
-
-// ========== GROUPED PROFILE PACKAGE SYSTEM ==========
 // Stores execution_order and apodization data for multi-profile auto-cycling.
 typedef struct {
-	uint8_t profile_count;              // Number of configured profiles (1-16)
-	uint8_t apod_channels;              // Apodization channels per profile (e.g., 64)
-	uint8_t exec_order_len;             // Length of execution_order array
-	uint8_t execution_order[MAX_PROFILES];         // Profile indices to cycle through (1-based)
-	uint8_t current_exec_index;          // Current position in execution_order (for auto-cycling)MAX_PROFILES
-	bool is_configured;                  // Flag: true if cycle data has been received
+	uint8_t profile_count;                  // Number of configured profiles (1-MAX_PROFILES)
+	uint8_t exec_order_len;                 // Length of execution_order array
+	uint8_t execution_order[MAX_PROFILES];  // Profile indices to cycle through (1-based)
+	uint8_t current_exec_index;             // Current position in execution_order
+	bool is_configured;                     // True once cycle data has been received
 } ProfileCycleConfig;
 
-
-
-static ProfileCycleConfig profile_cycle = {
-	.profile_count = 0,
-	.apod_channels = 0,
-	.exec_order_len = 0,
-	.current_exec_index = 0,
-	.is_configured = false
-};
+static ProfileCycleConfig profile_cycle = {0};
 
 static TxProfileCache tx_profile_cache[TX_PER_MODULE] = {0};
-static TxProfileStatus tx_profile_status = {0};
 static uint8_t selected_profile_response = 0;
 
-// Pattern profiles are 1 based in the datasheet
-static bool IsValidPatternProfile(uint8_t profile)
+// Profiles are 1-based in the host API and mapped to 0-based selector fields on-chip.
+static bool IsValidProfile(uint8_t profile)
 {
-	return (profile >= 1U) && (profile <= MAX_NUMBER_OF_PROFILES);
-}
-
-// Delay profiles are 1-based in host API and mapped to 0-based selector bits.
-static bool IsValidDelayProfile(uint8_t profile)
-{
-	return (profile >= 1U) && (profile <= MAX_NUMBER_OF_PROFILES);
-}
-
-// currently only doing pattern profiles
-__attribute__((unused))
-static bool ExtractUnifiedProfile(uint32_t delay_select_reg,
-								  uint32_t pattern_sel_g1,
-								  uint32_t pattern_sel_g2,
-								  uint8_t *profile)
-{
-	uint8_t delay_g1 = (uint8_t)((delay_select_reg >> BF_PROF_SEL_G1_SHIFT) & BF_PROF_SEL_FIELD_MASK);
-	uint8_t delay_g2 = (uint8_t)((delay_select_reg >> BF_PROF_SEL_G2_SHIFT) & BF_PROF_SEL_FIELD_MASK);
-	uint8_t pattern_g1 = (uint8_t)(pattern_sel_g1 & PATTERN_PROFILE_SELECT_MASK);
-	uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
-
-	if (delay_g1 != delay_g2 || pattern_g1 != pattern_g2) {
-		return false;
-	}
-
-	// Both delay and pattern selector fields are 0-based in the TX7332 registers.
-	if (delay_g1 != pattern_g1) {
-		return false;
-	}
-
-	uint8_t delay_profile = (uint8_t)(delay_g1 + 1U);
-	if (!IsValidDelayProfile(delay_profile)) {
-		return false;
-	}
-
-	*profile = delay_profile;
-	return true;
+	return (profile >= 1U) && (profile <= MAX_PROFILES);
 }
 
 static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_addr, uint8_t reg_count)
@@ -143,12 +97,12 @@ static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_ad
 
 		if (addr >= TX7332_DELAY_DATA_START && addr <= TX7332_DELAY_DATA_END) {
 			uint8_t delay_profile = (uint8_t)(((addr - TX7332_DELAY_DATA_START) / TX7332_DELAY_PROFILE_OFFSET) + 1U);
-			if (delay_profile >= 1U && delay_profile <= MAX_NUMBER_OF_PROFILES) {
+			if (IsValidProfile(delay_profile)) {
 				cache->delay_profiles_mask |= (uint16_t)(1U << (delay_profile - 1U));
 			}
 		} else if (addr >= TX7332_PATTERN_DATA_START && addr <= TX7332_PATTERN_DATA_END) {
 			uint8_t pattern_profile = (uint8_t)(((addr - TX7332_PATTERN_DATA_START) / TX7332_PATTERN_PROFILE_OFFSET) + 1U);
-			if (IsValidPatternProfile(pattern_profile)) {
+			if (IsValidProfile(pattern_profile)) {
 				cache->pattern_profiles_mask |= (uint32_t)(1UL << (pattern_profile - 1U));
 			}
 		}
@@ -158,89 +112,49 @@ static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_ad
 	cache->pattern_profile_count = __builtin_popcount(cache->pattern_profiles_mask);
 }
 
-// ========== GROUPED PROFILE CYCLE HELPERS ==========
-
-/**
- * Initialize the profile cycle configuration.
- * Called once at startup to prepare the auto-cycling infrastructure.
- */
-__attribute__((unused))
-static void init_profile_cycle_config(void)
-{
-	profile_cycle.profile_count = 0;
-	profile_cycle.apod_channels = 0;
-	profile_cycle.exec_order_len = 0;
-	profile_cycle.current_exec_index = 0;
-	profile_cycle.is_configured = false;
-	memset(profile_cycle.execution_order, 0, sizeof(profile_cycle.execution_order));
-	// memset(apodization_table, 0, sizeof(apodization_table));
-	// memset(active_apodization, 0, sizeof(active_apodization));
-}
-
-/**
- * Get the next profile index from the execution_order.
- * Advances current_exec_index and wraps around to 0 when reaching the end.
- * Returns the 1-based profile index to activate next.
- */
+// Return the next 1-based profile index from execution_order, advancing
+// current_exec_index and wrapping back to the start of the order.
 static uint8_t get_next_profile_in_cycle(void)
 {
 	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {
 		return 1; // Default to profile 1 if no cycle configured
 	}
-	
+
 	uint8_t next_index = profile_cycle.current_exec_index;
 	profile_cycle.current_exec_index = (profile_cycle.current_exec_index + 1) % profile_cycle.exec_order_len;
-	
+
 	return profile_cycle.execution_order[next_index];
 }
 
-/**
- * apply_next_profile_in_cycle()
- * 
- * Called from ISR context (TRIG_TIM1_IRQHandler) at pulse boundaries.
- * This applies the next profile in the cycle to all configured TX chips:
- * 1. Get next profile index from execution_order
- * 2. Apply delay profile to all TX chips
- * 3. Apply pattern profile to all TX chips
- * 4. Apply apodization to all TX chips
- * 5. Load/commit profile
- *
- * Returns true on success, false on error.
- */
+// Apply the next profile in the cycle (delay + pattern + apodization) to all
+// configured TX chips and commit it. Called from ISR context
+// (TRIG_TIM1_IRQHandler) at pulse boundaries. Returns true on success.
 bool apply_next_profile_in_cycle(void)
 {
 	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {
 		return false;
 	}
 
-	// Get the next profile to apply
 	uint8_t next_profile = get_next_profile_in_cycle();
-
-	if (!IsValidDelayProfile(next_profile) || !IsValidPatternProfile(next_profile)) {
+	if (!IsValidProfile(next_profile)) {
 		return false;
 	}
 
-	// Apply to all TX chips
+	// Apply delay profile, pattern profile (0-based selector on-chip), and
+	// apodization to all TX chips, then commit with the self-clearing LOAD_PROF bit.
 	uint8_t tx_count = get_tx_chip_count();
 	for (uint8_t txi = 0; txi < tx_count; txi++) {
-		// Apply delay profile
 		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi], txi);
-		
-		// Apply pattern profile (TX7332 pattern selector is 0-based)
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G2, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
-		
-		// Load profile (self-clearing LOAD_PROF bit)
 		TX7332_LoadProfile(&transmitters[txi]);
 	}
 
 	return true;
 }
 
-/**
- * Reset the profile cycle to the beginning and apply the first profile.
- * Called at pulse train boundaries so each train independently cycles all profiles.
- */
+// Reset the profile cycle to the beginning and apply the first profile. Called
+// at pulse train boundaries so each train independently cycles all profiles.
 void reset_profile_cycle_to_start(void)
 {
 	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) return;
@@ -248,11 +162,6 @@ void reset_profile_cycle_to_start(void)
 	profile_cycle.current_exec_index = 0;
 	apply_next_profile_in_cycle();
 }
-
-/**
- * Apply apodization for the selected profile.
- * Copies the cached row and writes the per-chip apodization register.
- */
 
 static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
 static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
@@ -728,13 +637,12 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				}
 
 				// Start pulse-level auto-cycle
-				extern void auto_cycle_start(uint32_t pulses_per_profile);
-				auto_cycle_start(pulses_per_profile);
-				
-				if(start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
-					uartResp->packet_type = OW_ERROR;
-					extern void auto_cycle_stop(void);
-					auto_cycle_stop();
+				if (!tx_overheat_flag) {
+					auto_cycle_start(pulses_per_profile);
+					if (start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
+						uartResp->packet_type = OW_ERROR;
+						auto_cycle_stop();
+					}
 				}
 			} else {
 				// Normal mode: single trigger sequence
@@ -754,9 +662,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 			
 			// Stop auto-cycle if active
-			extern bool auto_cycle_is_active(void);
 			if (auto_cycle_is_active()) {
-				extern void auto_cycle_stop(void);
 				auto_cycle_stop();
 			}
 			break;
@@ -765,13 +671,22 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			
+
 			if (module_id != 0){
 				// trigger is only on master
 				uartResp->packet_type = OW_ERROR;
 				uartResp->data = NULL;
 				break;
 			}
+
+			// A new trigger config starts a clean session: drop any profile
+			// cycle left over from a previous solution so single-profile runs
+			// don't inherit stale auto-cycling. Multi-profile solutions send
+			// OW_CTRL_SET_PROFILE_CYCLE again after this command.
+			auto_cycle_stop();
+			profile_cycle.is_configured = false;
+			profile_cycle.exec_order_len = 0;
+			profile_cycle.current_exec_index = 0;
 
 			if(!set_trigger_data((char *)cmd->data, cmd->data_len))
 			{
@@ -971,12 +886,13 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			uint8_t profile = cmd->data[0];
-			if (!IsValidPatternProfile(profile)) {
+			if (!IsValidProfile(profile)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			// Pattern profile selector is 0-based in the TX7332 register.\n			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+			// Pattern profile selector is 0-based in the TX7332 registers.
+			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 
 			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
@@ -989,7 +905,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
-			uartResp->data_len = 1;
+			uartResp->data_len = 0;
 
 			if (cmd->addr >= get_tx_chip_count()) {
 				uartResp->packet_type = OW_ERROR;
@@ -1003,15 +919,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
 
 			// Pattern selector is 0-based in hardware; convert to 1-based for host.
-			if ((pattern_g1 != pattern_g2) || !IsValidPatternProfile(pattern_g1 + 1U)) {
+			if ((pattern_g1 != pattern_g2) || !IsValidProfile(pattern_g1 + 1U)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
 			selected_profile_response = pattern_g1 + 1U;
-
 			uartResp->data = &selected_profile_response;
-
+			uartResp->data_len = 1;
 			break;
 		}
 		case OW_CTRL_SET_DELAY_PROFILE:
@@ -1032,7 +947,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			uint8_t profile = *((uint8_t *)cmd->data);
-			if (!IsValidDelayProfile(profile)) {
+			if (!IsValidProfile(profile)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
@@ -1048,7 +963,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
-			uartResp->data_len = 1;
+			uartResp->data_len = 0;
 
 			if (cmd->addr >= get_tx_chip_count()) {
 				uartResp->packet_type = OW_ERROR;
@@ -1056,50 +971,35 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			uint8_t profile = 0U;
-			if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
-
-			if (!IsValidDelayProfile(profile)) {
+			if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile) ||
+				!IsValidProfile(profile)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
 			selected_profile_response = profile;
 			uartResp->data = &selected_profile_response;
+			uartResp->data_len = 1;
 			break;
 		}
 		case OW_CTRL_SET_PROFILE_CYCLE:
 		{
-			/**
-			 * Grouped Profile Cycle Command Handler
-			 *
-			 * Receives execution_order and pre-computed apodization registers from host.
-			 * The SDK computes the TX7332 apodization register values (including
-			 * channel-to-bit mapping) and sends them directly as uint32 per chip.
-			 *
-			 * Packet Format:
-			 *   [profile_count:1] [n_chips:1] [exec_order_len:1]
-			 *   [execution_order[0..exec_order_len-1]: N bytes]
-			 *   [profile_0_chip_0_apod_reg: 4 bytes LE] [profile_0_chip_1_apod_reg: 4 bytes LE]
-			 *   [profile_1_chip_0_apod_reg: 4 bytes LE] [profile_1_chip_1_apod_reg: 4 bytes LE]
-			 *   ...
-			 */
+			// Receives execution_order and pre-computed apodization registers
+			// from the host (payload layout documented at PROFILE_CYCLE_HEADER_LEN).
+			// The SDK computes the TX7332 apodization register values, including
+			// the channel-to-bit mapping, so they are stored and written as-is.
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
 			// Gating: Prevent cycle config changes while auto-cycle is running
-			extern bool auto_cycle_is_active(void);
 			if (auto_cycle_is_active()) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			// Minimum payload: 3 bytes header
-			if (cmd->data_len < 3U) {
+			if (cmd->data_len < PROFILE_CYCLE_HEADER_LEN) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
@@ -1117,21 +1017,19 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			// Expected payload: 3 (header) + exec_order_len + (n_profiles * n_chips * 4)
-			uint16_t expected_size = 3U + (uint16_t)exec_order_len + ((uint16_t)n_profiles * (uint16_t)n_chips * 4U);
+			uint16_t expected_size = PROFILE_CYCLE_HEADER_LEN + (uint16_t)exec_order_len +
+				((uint16_t)n_profiles * (uint16_t)n_chips * (uint16_t)sizeof(uint32_t));
 			if (cmd->data_len < expected_size) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			// ========== STORE CONFIGURATION ==========
 			profile_cycle.profile_count = n_profiles;
-			profile_cycle.apod_channels = n_chips;
 			profile_cycle.exec_order_len = exec_order_len;
 			profile_cycle.current_exec_index = 0;
 
 			// Extract execution_order indices (1-based)
-			uint8_t *exec_order_ptr = &payload[3];
+			uint8_t *exec_order_ptr = &payload[PROFILE_CYCLE_HEADER_LEN];
 			for (uint8_t i = 0; i < exec_order_len; i++) {
 				uint8_t profile_idx = exec_order_ptr[i];
 				if (profile_idx < 1 || profile_idx > n_profiles) {
@@ -1142,10 +1040,10 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			// Extract pre-computed apodization registers per profile per chip (little-endian uint32)
-			uint8_t *apod_data_ptr = &payload[3 + exec_order_len];
+			uint8_t *apod_data_ptr = &payload[PROFILE_CYCLE_HEADER_LEN + exec_order_len];
 			for (uint8_t p = 0; p < n_profiles; p++) {
 				for (uint8_t c = 0; c < n_chips; c++) {
-					uint8_t *reg_ptr = &apod_data_ptr[(p * n_chips + c) * 4U];
+					uint8_t *reg_ptr = &apod_data_ptr[(p * n_chips + c) * sizeof(uint32_t)];
 					apod_registers[p][c] = (uint32_t)reg_ptr[0]
 						| ((uint32_t)reg_ptr[1] << 8)
 						| ((uint32_t)reg_ptr[2] << 16)
@@ -1228,14 +1126,6 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			reg_value = cmd->data[2] | (cmd->data[3] << 8) | (cmd->data[4] << 16) | (cmd->data[5] << 24);
 
 			TX7332_WriteReg(&transmitters[cmd->addr], reg_address, reg_value);
-			// Keep apodization synchronized when host switches profiles by writing 0x16 directly.
-			if (reg_address == DELAY_PROFILE_SELECT_REGISTER) {
-				uint8_t selected_profile =
-					(uint8_t)(((reg_value >> BF_PROF_SEL_G1_SHIFT) & BF_PROF_SEL_FIELD_MASK) + 1U);
-				if (IsValidPatternProfile(selected_profile)) {
-					// apply_profile_apodization(cmd->addr, selected_profile);
-				}
-			}
 			cache_profiles_from_register_range(cmd->addr, reg_address, 1U);
 		}
 		else
@@ -1402,12 +1292,8 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 		module_id = ModuleManager_GetModuleIndex(cmd->addr);
 		if (module_id == 0x00) {
-			tx_profile_status.delay_profile_count = tx_profile_cache[cmd->addr].delay_profile_count;
-			tx_profile_status.pattern_profile_count = tx_profile_cache[cmd->addr].pattern_profile_count;
-			tx_profile_status.delay_profiles_mask = tx_profile_cache[cmd->addr].delay_profiles_mask;
-			tx_profile_status.pattern_profiles_mask = tx_profile_cache[cmd->addr].pattern_profiles_mask;
-			uartResp->data_len = (uint16_t)sizeof(tx_profile_status);
-			uartResp->data = (uint8_t *)&tx_profile_status;
+			uartResp->data_len = (uint16_t)sizeof(tx_profile_cache[cmd->addr]);
+			uartResp->data = (uint8_t *)&tx_profile_cache[cmd->addr];
 		} else {
 			process_i2c_forward(uartResp, cmd, module_id);
 		}
@@ -1457,34 +1343,6 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		uartResp->data_len = 1;
 	}
 		break;
-
-	case OW_TX7332_SET_DELAY_PROFILE:
-	{
-		uartResp->command = cmd->command;
-		uartResp->addr = cmd->addr;
-		uartResp->reserved = cmd->reserved;
-		uartResp->data_len = 0;
-
-		if (cmd->addr >= get_tx_chip_count()) {
-			uartResp->packet_type = OW_ERROR;
-			return;
-		}
-
-		if (cmd->data_len < 1U) {
-			uartResp->packet_type = OW_ERROR;
-			return;
-		}
-
-		uint8_t profile = *((uint8_t *)cmd->data);
-		if (!IsValidDelayProfile(profile)) {
-			uartResp->packet_type = OW_ERROR;
-			return;
-		}
-
-		TX7332_SetActiveDelayProfile(profile, &transmitters[cmd->addr], cmd->addr);
-
-		break;
-	}
 
 	case OW_TX7332_RESET:
 		uartResp->command = OW_TX7332_RESET;

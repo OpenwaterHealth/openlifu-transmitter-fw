@@ -20,11 +20,6 @@
 #define TX_PER_MODULE 2
 #define MAX_MODULES   6  // Total number of modules (master + slaves)
 
-#define MAX_PROFILES 16
-#define NUM_CHANNELS 64
-#define TX_APOD_CHANNELS_PER_CHIP 32U
-#define TX7332_APODIZATION_REGISTER 0x1BU
-
 #ifndef FW_VERSION
 #define FW_VERSION "unknown"
 #endif
@@ -94,8 +89,6 @@ typedef enum {
 	OW_CMD_DFU = 0x0D,
 	OW_CMD_NOP = 0x0E,
 	OW_CMD_RESET = 0x0F,
-	OW_CMD_FLASH_WRITE = 0x10,
-	OW_CMD_FLASH_READ = 0x11,
 } UstxGlobalCommands;
 
 // Node operating mode reported in the OW_CMD_DISCOVERY response payload (data[0]).
@@ -120,11 +113,11 @@ typedef enum {
 	OW_CTRL_GET_MODULE_COUNT = 0x1A,
 	OW_CTRL_GET_MODULE_MODE  = 0x1B,  // Phase 2: return a module's NodeMode (app vs bootloader)
 	OW_CTRL_ENUMERATE        = 0x1C,  // Phase 2: re-run clear-config + discovery walk on demand
-	OW_CTRL_SET_PATTERN_PROFILE = 0x1B,
-	OW_CTRL_GET_PATTERN_PROFILE = 0x1C,
 	OW_CTRL_SET_DELAY_PROFILE = 0x1D,
 	OW_CTRL_GET_DELAY_PROFILE = 0x1E,
 	OW_CTRL_SET_PROFILE_CYCLE = 0x1F,
+	OW_CTRL_SET_PATTERN_PROFILE = 0x28,  // 0x28 and 0x29 skip the UstxTX7332Commands block since we're out of hex values
+	OW_CTRL_GET_PATTERN_PROFILE = 0x29, 
 } UstxControllerCommands;
 
 typedef enum {
@@ -138,7 +131,6 @@ typedef enum {
 	OW_TX7332_RBLOCK = 0x27,
 	OW_TX7332_DEVICE_COUNT = 0x2C,
 	OW_TX7332_DEMO = 0x2D,
-	OW_TX7332_SET_DELAY_PROFILE = 0x2E,
 	OW_TX7332_RESET = 0x2F,
 } UstxTX7332Commands;
 
