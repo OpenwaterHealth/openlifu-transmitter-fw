@@ -127,8 +127,9 @@ static uint8_t get_next_profile_in_cycle(void)
 }
 
 // Apply the next profile in the cycle (delay + pattern + apodization) to all
-// configured TX chips and commit it. Called from ISR context
-// (TRIG_TIM1_IRQHandler) at pulse boundaries. Returns true on success.
+// configured TX chips and commit it. Called from ISR context (the LORES_TIMER
+// compare interrupt in trigger.c, during inter-pulse dead time) and from the
+// START_SWTRIG handler before the trigger starts. Returns true on success.
 bool apply_next_profile_in_cycle(void)
 {
 	if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {

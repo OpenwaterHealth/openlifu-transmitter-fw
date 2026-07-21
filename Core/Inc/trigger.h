@@ -30,9 +30,10 @@ typedef enum {
 	AUTO_CYCLE_ERROR = 2
 } AutoCycleState_e;
 
-// Minimum inter-pulse dead time (µs) required for profile switching SPI writes.
-// If (1/freq - pulse_width) < this value, auto-cycle rejects the configuration.
-// Measured: ~460µs at SPI prescaler /4 (12 MHz). Using 1ms for safety margin.
+// Dead-time window (us) reserved at the end of each trigger period for the
+// profile-switch SPI writes: the deferred switch runs this long before the
+// next trigger edge, and start_trigger_pulse rejects periods too short to
+// hold the window. Sized with comfortable margin over the SPI write time.
 #define MIN_PROFILE_SWITCH_US 1000
 
 typedef struct {
