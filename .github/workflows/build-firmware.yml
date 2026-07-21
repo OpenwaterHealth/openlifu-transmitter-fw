@@ -125,7 +125,12 @@ jobs:
 
       # ---------------------------
       # Resolve which open-lifu-transmitter-bl release to bundle. Uses the
-      # workflow_dispatch input when given, otherwise the latest published release.
+      # workflow_dispatch input when given. Otherwise:
+      #   pre-release build (rc tag or next branch) -> the latest PRE-RELEASE
+      #     bootloader, but only if it is semver-NEWER than the latest stable
+      #     release (a stable X.Y.Z supersedes its own X.Y.Z-rc.N); otherwise
+      #     fall back to the latest stable release.
+      #   release build (release tag or main)       -> latest stable release.
       # ---------------------------
       - name: Resolve open-lifu-transmitter-bl release tag
         id: bl
@@ -134,19 +139,40 @@ jobs:
         run: |
           set -euo pipefail
           REQ="${{ github.event.inputs.bl_release }}"
-          if [ -z "$REQ" ] || [ "$REQ" = "latest" ]; then
-            TAG=$(gh release view --repo OpenwaterHealth/open-lifu-transmitter-bl --json tagName --jq .tagName)
-          else
+          if [ -n "$REQ" ] && [ "$REQ" != "latest" ]; then
             TAG="$REQ"
+          else
+            REL=$(gh release list --repo OpenwaterHealth/open-lifu-transmitter-bl \
+                  --json tagName,isPrerelease \
+                  --jq 'map(select(.isPrerelease | not)) | .[0].tagName // empty')
+            PRE=$(gh release list --repo OpenwaterHealth/open-lifu-transmitter-bl \
+                  --json tagName,isPrerelease \
+                  --jq 'map(select(.isPrerelease)) | .[0].tagName // empty')
+            TAG="$REL"
+            if [[ "${GITHUB_REF_NAME}" == "next" || "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]]; then
+              # semver compare: '-rc.' -> '~rc.' makes sort -V rank a
+              # pre-release below its own stable release but above older ones.
+              if [ -n "$PRE" ] && { [ -z "$REL" ] || \
+                   [ "$(printf '%s\n' "${PRE/-rc./~rc.}" "$REL" | sort -V | tail -n1)" = "${PRE/-rc./~rc.}" ]; }; then
+                TAG="$PRE"
+              fi
+            fi
+            if [ -z "$TAG" ]; then
+              echo "::error::No open-lifu-transmitter-bl release found to bundle." >&2
+              exit 1
+            fi
+            echo "Bootloader candidates: stable='${REL:-none}' pre-release='${PRE:-none}'"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Bundling open-lifu-transmitter-bl @ $TAG"
+          echo "Bundling open-lifu-transmitter-bl @ $TAG (ref ${GITHUB_REF_NAME})"
 
       # The signer is the SDK's LIFUCrypto — the single source of truth for the
       # image format and the FwVersion encoding. Install the SDK from the
-      # build-type-appropriate published release:
-      #   next branch or an rc tag (X.Y.Z-rc.N) -> latest PRE-RELEASE openlifu-sdk
-      #   main branch or a release tag (X.Y.Z)   -> latest stable RELEASE openlifu-sdk
+      # build-type-appropriate published release (same rule as the bootloader):
+      #   pre-release build (rc tag or next branch) -> latest PRE-RELEASE
+      #     openlifu-sdk, but only if it is semver-newer than the latest stable
+      #     release; otherwise the latest stable release.
+      #   release build (release tag or main)       -> latest stable release.
       # (The bootloader that verifies the image is bundled separately; the SDK
       # only owns the signing format.)
       - name: Resolve openlifu-sdk (signer) release
@@ -155,19 +181,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          REL=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
+                --json tagName,isPrerelease \
+                --jq 'map(select(.isPrerelease | not)) | .[0].tagName // empty')
+          PRE=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
+                --json tagName,isPrerelease \
+                --jq 'map(select(.isPrerelease)) | .[0].tagName // empty')
+          TAG="$REL"
+          KIND="release"
           if [[ "${GITHUB_REF_NAME}" == "next" || "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]]; then
-            SEL='map(select(.isPrerelease)) | .[0].tagName // empty'
-            KIND="pre-release"
-          else
-            SEL='map(select(.isPrerelease | not)) | .[0].tagName // empty'
-            KIND="release"
+            # semver compare: '-rc.' -> '~rc.' makes sort -V rank a pre-release
+            # below its own stable release but above older ones.
+            if [ -n "$PRE" ] && { [ -z "$REL" ] || \
+                 [ "$(printf '%s\n' "${PRE/-rc./~rc.}" "$REL" | sort -V | tail -n1)" = "${PRE/-rc./~rc.}" ]; }; then
+              TAG="$PRE"
+              KIND="pre-release"
+            fi
           fi
-          TAG=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
-                --json tagName,isPrerelease --jq "$SEL")
           if [ -z "$TAG" ]; then
-            echo "::error::No openlifu-sdk $KIND found to install." >&2
+            echo "::error::No openlifu-sdk release found to install." >&2
             exit 1
           fi
+          echo "SDK candidates: stable='${REL:-none}' pre-release='${PRE:-none}'"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "kind=$KIND" >> "$GITHUB_OUTPUT"
           echo "Resolved openlifu-sdk $KIND @ $TAG (ref ${GITHUB_REF_NAME})"
