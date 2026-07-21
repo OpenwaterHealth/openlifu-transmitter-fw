@@ -27,11 +27,13 @@ permissions:
 #
 #   SECOREBIN_AES_KEY  AES-128 key as base64 of the raw 16 bytes. Same value as
 #                      the open-lifu-transmitter-bl secret of the same name. The
-#                      CBC crypto scheme's sign step requires it
-#                      (sign_firmware.py --aes-key).
+#                      CBC crypto scheme's sign step requires it (the SDK signer
+#                      reads it as aes128.bin in the --keys directory).
 #
-# Reuse the SAME keypair as open-lifu-transmitter-bl: a new keypair would
-# require re-keying and rebuilding the bootloader.
+# All repos involved are public, so the openlifu-sdk (signer) install and the
+# bootloader-release download use the default GITHUB_TOKEN — no extra PAT is
+# needed. Reuse the SAME keypair as open-lifu-transmitter-bl: a new keypair
+# would require re-keying and rebuilding the bootloader.
 # ---------------------------------------------------------------------------
 
 jobs:
@@ -65,24 +67,39 @@ jobs:
 
       # ---------------------------
       # FwVersion is a uint16 consumed by the bootloader's anti-rollback check.
-      # Derive it from a release tag X.Y.Z as X*10000 + Y*100 + Z (supports up to
-      # 6.55.35); non-release builds sign as version 1.
-      # WARNING: a unit that has installed version N rejects any image < N. Keep
-      # release versions monotonic.
+      # The encoding is owned by the SDK signer (openlifu_sdk.io.LIFUCrypto):
+      # a 16-bit bitfield major[15:11].minor[10:5].patch[4:0] (major 0-31,
+      # minor 0-63, patch 0-31), monotonic with semver. We pass the release
+      # tag (a semver string; -rc suffixes are dropped) and the signer encodes
+      # it. Non-release builds sign as 0.0.1.
+      # WARNING: a unit that has installed version N rejects any image < N.
+      # Keep release versions monotonic. NOTE: this is a DIFFERENT encoding
+      # from the legacy decimal MMmmpp (1.2.6 was 10206, is now 2118) - units
+      # with a floor latched under the old scheme must have it reset before
+      # accepting new-scheme images.
       # ---------------------------
-      - name: Compute signing FW version
+      - name: Resolve signing version string
         id: fwver
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [[ "$GITHUB_REF" == refs/tags/* && "$TAG" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-            V=$(( ${BASH_REMATCH[1]}*10000 + ${BASH_REMATCH[2]}*100 + ${BASH_REMATCH[3]} ))
-            [ "$V" -lt 1 ] && V=1
-            [ "$V" -gt 65535 ] && V=65535
-          else
-            V=1
+          # Tag build -> that tag. Branch builds derive the version from the
+          # newest matching tag so the image is installable on units at that
+          # anti-rollback floor (instead of always signing as 0.0.1):
+          #   next -> latest PRE-RELEASE (X.Y.Z-rc.N)
+          #   main -> latest RELEASE     (X.Y.Z)
+          # git tag needs full history/tags (fetch-depth: 0, fetch-tags: true).
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSTR="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_REF_NAME}" == "next" ]]; then
+            VERSTR=$(git tag --sort=-creatordate \
+                     | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true)
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            VERSTR=$(git tag --sort=-creatordate \
+                     | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)
           fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Signing FwVersion: $V"
+          # Fallback when no matching tag exists yet.
+          VERSTR="${VERSTR:-0.0.1}"
+          echo "verstr=$VERSTR" >> "$GITHUB_OUTPUT"
+          echo "Signing version (semver): $VERSTR (ref ${GITHUB_REF_NAME})"
 
       - name: Pull build image
         run: docker pull ghcr.io/openwaterhealth/stm32-build-env:latest
@@ -125,15 +142,43 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Bundling open-lifu-transmitter-bl @ $TAG"
 
-      # Pull the signing tool from the SAME pinned bootloader version so the
-      # signing format always matches the bootloader that will verify it.
-      - name: Fetch signing tool from open-lifu-transmitter-bl
-        uses: actions/checkout@v4
-        with:
-          repository: OpenwaterHealth/open-lifu-transmitter-bl
-          ref: ${{ steps.bl.outputs.tag }}
-          path: _bl
-          sparse-checkout: py-tools
+      # The signer is the SDK's LIFUCrypto — the single source of truth for the
+      # image format and the FwVersion encoding. Install the SDK from the
+      # build-type-appropriate published release:
+      #   next branch or an rc tag (X.Y.Z-rc.N) -> latest PRE-RELEASE openlifu-sdk
+      #   main branch or a release tag (X.Y.Z)   -> latest stable RELEASE openlifu-sdk
+      # (The bootloader that verifies the image is bundled separately; the SDK
+      # only owns the signing format.)
+      - name: Resolve openlifu-sdk (signer) release
+        id: sdk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" == "next" || "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]]; then
+            SEL='map(select(.isPrerelease)) | .[0].tagName // empty'
+            KIND="pre-release"
+          else
+            SEL='map(select(.isPrerelease | not)) | .[0].tagName // empty'
+            KIND="release"
+          fi
+          TAG=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
+                --json tagName,isPrerelease --jq "$SEL")
+          if [ -z "$TAG" ]; then
+            echo "::error::No openlifu-sdk $KIND found to install." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo "Resolved openlifu-sdk $KIND @ $TAG (ref ${GITHUB_REF_NAME})"
+
+      - name: Install openlifu-sdk (signer)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet \
+            "openlifu-sdk[crypto] @ git+https://github.com/OpenwaterHealth/openlifu-sdk@${{ steps.sdk.outputs.tag }}"
+          # Confirm the signer module imports (also validates the deps).
+          python3 -c "import openlifu_sdk.io.LIFUCrypto as m; print('signer:', m.__file__)"
 
       - name: Download bootloader binary from open-lifu-transmitter-bl release
         env:
@@ -153,12 +198,12 @@ jobs:
       # never written into the repo tree.
       # ---------------------------
       - name: Sign the slot image
+        id: sign
         env:
           FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
           SECOREBIN_AES_KEY: ${{ secrets.SECOREBIN_AES_KEY }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet 'cryptography>=41'
           KD="$(mktemp -d)"
           trap 'rm -rf "$KD"' EXIT
           printf '%s\n' "$FW_SIGNING_KEY" > "$KD/ecdsa_private.pem"
@@ -169,14 +214,19 @@ jobs:
           fi
           APP="build/Release/lifu-transmitter-fw.bin"
           test -s "$APP"
-          python3 _bl/py-tools/sign_firmware.py \
+          # Sign with the installed SDK (openlifu-sdk[crypto], resolved above);
+          # --keys is the tmp dir holding the materialised ecdsa_private.pem +
+          # aes128.bin.
+          python3 -m openlifu_sdk.io.LIFUCrypto sign \
+            --keys "$KD" \
             --firmware "$APP" \
-            --private-key "$KD/ecdsa_private.pem" \
-            --aes-key "$KD/aes128.bin" \
-            --version "${{ steps.fwver.outputs.version }}" \
-            --output _artifacts/openlifu-transmitter-fw-signed.bin
+            --version "${{ steps.fwver.outputs.verstr }}" \
+            --output _artifacts/openlifu-transmitter-fw-signed.bin \
+            | tee _sign.out
           test -s _artifacts/openlifu-transmitter-fw-signed.bin
-          echo "Signed slot image (FwVersion=${{ steps.fwver.outputs.version }})"
+          FWVER="$(sed -n 's/.*FW version *: *\([0-9]\+\).*/\1/p' _sign.out | head -n1)"
+          echo "fwversion=$FWVER" >> "$GITHUB_OUTPUT"
+          echo "Signed slot image (semver=${{ steps.fwver.outputs.verstr }}, FwVersion=$FWVER)"
 
       # ---------------------------
       # Production image = bootloader (@0x08000000) + signed app (@0x08010000),
@@ -293,7 +343,8 @@ jobs:
           echo "**Build SHA:** \`${{ steps.buildmeta.outputs.sha }}\`" >> notes.md
           echo "**Build Time:** ${{ steps.buildmeta.outputs.datetime }}" >> notes.md
           echo "**Bundled bootloader:** \`${{ steps.bl.outputs.tag }}\`" >> notes.md
-          echo "**Signed FwVersion:** \`${{ steps.fwver.outputs.version }}\`" >> notes.md
+          echo "**Signer (openlifu-sdk):** \`${{ steps.sdk.outputs.tag }}\`" >> notes.md
+          echo "**Signed version:** \`${{ steps.fwver.outputs.verstr }}\` (FwVersion \`${{ steps.sign.outputs.fwversion }}\`, bitfield)" >> notes.md
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
