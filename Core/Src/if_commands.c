@@ -63,7 +63,7 @@ typedef struct {
 typedef struct {
 	uint8_t profile_count;                 
 	uint8_t exec_order_len;                
-	uint8_t execution_order[MAX_PROFILES]; 
+	uint8_t execution_order[MAX_EXECUTION_ORDER];
 	uint8_t current_exec_index;             
 	bool is_configured;                     
 } ProfileCycleConfig;
@@ -1002,7 +1002,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Validate ranges
 			if (n_profiles < 1 || n_profiles > MAX_PROFILES ||
 				n_chips < 1 || n_chips > TX_PER_MODULE ||
-				exec_order_len < 1 || exec_order_len > MAX_PROFILES) {
+				exec_order_len < 1 || exec_order_len > MAX_EXECUTION_ORDER) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}

@@ -17,6 +17,11 @@ typedef struct TX7332 {
 // Self-imposed stored-profile limit; the chip itself supports up to 32 pattern profiles.
 #define MAX_PROFILES 16
 
+// Maximum execution-order (profile-cycle) length. Distinct from MAX_PROFILES:
+// the order may repeat the <=16 profiles, so its length is bounded only by the
+// 1-byte exec_order_len wire field, not the profile count.
+#define MAX_EXECUTION_ORDER 255
+
 #define TX7332_APODIZATION_REGISTER 0x1B
 
 #define TX7332_PATTERN_MODE_REGISTER   0x18
