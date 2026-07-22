@@ -463,7 +463,6 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM7_Init();
   MX_TIM15_Init();
-  MX_USB_DEVICE_Init();
   MX_USART1_UART_Init();
   MX_LPTIM1_Init();
   MX_LPTIM2_Init();
@@ -1609,11 +1608,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : RST_Pin */
+  /*Configure GPIO pin : RST_Pin (PA1) — inter-board READY line.
+   * Default it to open-drain driven LOW ("not ready") from the first GPIO
+   * setup, before the USB role is known. The secure bootloader also holds this
+   * line LOW while it runs, so defaulting it LOW here means there is no window
+   * where the line floats HIGH between the bootloader releasing it and
+   * ConfigureResetPin()/configure_slave() taking over — which would let the
+   * master enumerate this board before it is actually ready. ConfigureResetPin()
+   * later switches it to input-pullup on the master (the reader) or keeps it
+   * open-drain on a slave (released to Hi-Z = ready once configure_slave()
+   * completes). */
   GPIO_InitStruct.Pin = RST_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RST_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(RST_GPIO_Port, RST_Pin, GPIO_PIN_RESET); /* LOW = not ready */
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -1716,6 +1726,7 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
   * @param  htim : TIM handle
   * @retval None
   */
+// cppcheck-suppress constParameterPointer -- must match the HAL weak callback signature (non-const TIM_HandleTypeDef *)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
