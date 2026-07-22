@@ -543,11 +543,7 @@ void TRIG_TIM2_IRQHandler(void) {
 	}else{
 	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
 
-	    // Reset pulse-level profile cycling for the new pulse train. Deferred:
-	    // the final pulse's burst may still be sounding when this train-boundary
-	    // interrupt fires, and the new train's first pulse is a full trigger
-	    // period away, so the compare interrupt applies the first profile in
-	    // dead time just before it.
+	    // Reset pulse-level profile cycling for the new pulse train
 	    if (_auto_cycle.is_active) {
 	        _auto_cycle.pulse_counter_in_profile = 0;
 	        schedule_profile_action(PROFILE_ACTION_RESET);

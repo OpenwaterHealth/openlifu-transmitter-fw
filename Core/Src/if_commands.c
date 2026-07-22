@@ -42,13 +42,7 @@ uint8_t receive_buffer[I2C_BUFFER_SIZE] = {0};
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-// Delay profile RAM starts at 0x20 (16 regs/profile), pattern RAM starts at 0x120 (4 regs/profile).
-#define TX7332_DELAY_DATA_START       0x20
-#define TX7332_DELAY_DATA_END         0x11F
-#define TX7332_PATTERN_DATA_START     0x120
-#define TX7332_PATTERN_DATA_END       0x19F
-#define TX7332_DELAY_PROFILE_OFFSET   16
-#define TX7332_PATTERN_PROFILE_OFFSET 4
+
 
 // OW_CTRL_SET_PROFILE_CYCLE payload: [profile_count:1][n_chips:1][exec_order_len:1]
 // header, then the execution order bytes, then one little-endian uint32
@@ -67,11 +61,11 @@ typedef struct {
 
 // Stores execution_order and apodization data for multi-profile auto-cycling.
 typedef struct {
-	uint8_t profile_count;                  // Number of configured profiles (1-MAX_PROFILES)
-	uint8_t exec_order_len;                 // Length of execution_order array
-	uint8_t execution_order[MAX_PROFILES];  // Profile indices to cycle through (1-based)
-	uint8_t current_exec_index;             // Current position in execution_order
-	bool is_configured;                     // True once cycle data has been received
+	uint8_t profile_count;                 
+	uint8_t exec_order_len;                
+	uint8_t execution_order[MAX_PROFILES]; 
+	uint8_t current_exec_index;             
+	bool is_configured;                     
 } ProfileCycleConfig;
 
 static ProfileCycleConfig profile_cycle = {0};
@@ -680,9 +674,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				break;
 			}
 
-			// A new trigger config starts a clean session: drop any profile
-			// cycle left over from a previous solution so single-profile runs
-			// don't inherit stale auto-cycling. Multi-profile solutions send
+			// Clear any current trigger configs. Multi-profile solutions send
 			// OW_CTRL_SET_PROFILE_CYCLE again after this command.
 			auto_cycle_stop();
 			profile_cycle.is_configured = false;
@@ -986,9 +978,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		case OW_CTRL_SET_PROFILE_CYCLE:
 		{
 			// Receives execution_order and pre-computed apodization registers
-			// from the host (payload layout documented at PROFILE_CYCLE_HEADER_LEN).
-			// The SDK computes the TX7332 apodization register values, including
-			// the channel-to-bit mapping, so they are stored and written as-is.
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;

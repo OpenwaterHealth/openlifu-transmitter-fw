@@ -24,16 +24,18 @@ typedef enum {
 	TRIGGER_STATE_TRAIN_INTERVAL = 3
 } TriggerState;
 
+// enum for auto-cycling during rastered focusing
 typedef enum {
 	AUTO_CYCLE_IDLE = 0,
 	AUTO_CYCLE_RUNNING = 1,
 	AUTO_CYCLE_ERROR = 2
 } AutoCycleState_e;
 
-// Dead-time window (us) reserved at the end of each trigger period for the
-// profile-switch SPI writes: the deferred switch runs this long before the
-// next trigger edge, and start_trigger_pulse rejects periods too short to
-// hold the window. Sized with comfortable margin over the SPI write time.
+// 1ms window reserved for allowing the profile switch to happen
+// in-between trigger pulses. Measured SPI write for all apods + profiles
+// is ~500us so setting double for margin.
+// #TODO: switch to write + successful read and then apply the switch
+// rather than default fixed time.  
 #define MIN_PROFILE_SWITCH_US 1000
 
 typedef struct {
@@ -75,20 +77,10 @@ void TRIG_TIM1_IRQHandler(void);
 void print_OW_TimerData(const OW_TimerData *data);
 
 // Auto-cycle API: pulse-level profile switching driven from the trigger ISRs.
-
-// Start pulse-level auto-cycle mode. pulses_per_profile = pulse_count / n_profiles.
 void auto_cycle_start(uint32_t pulses_per_profile);
-
-// Stop auto-cycle mode (called on stop or error)
 void auto_cycle_stop(void);
-
-// Check if auto-cycle is currently active
 bool auto_cycle_is_active(void);
-
-// Get current auto-cycle state
 AutoCycleState_e auto_cycle_get_state(void);
-
-// Reset the pulse counter within a profile slot (called at pulse train boundaries)
 void auto_cycle_reset_pulse_counter(void);
 
 // Weak callback functions

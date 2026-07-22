@@ -19,9 +19,8 @@ typedef struct TX7332 {
 
 #define TX7332_APODIZATION_REGISTER 0x1B
 
-// Pattern-mode register; its upper 4 bits do not read back as written.
 #define TX7332_PATTERN_MODE_REGISTER   0x18
-#define TX7332_PATTERN_MODE_READ_MASK  0x0FFFFFFF
+#define TX7332_PATTERN_MODE_READ_MASK  0x0FFFFFFF // upper 4 bits should be ignored
 
 // Pattern profile select fields live in two registers (one per channel group).
 #define PATTERN_PROFILE_SELECT_REG_G1  0x1F
@@ -33,6 +32,14 @@ typedef struct TX7332 {
 #define BF_PROF_SEL_G1_SHIFT           28  // bits 28-31 select the group-1 delay profile
 #define BF_PROF_SEL_G2_SHIFT           12  // bits 12-15 select the group-2 delay profile
 #define BF_PROF_SEL_FIELD_MASK         0x0F
+
+// Delay profile RAM starts at 0x20 (16 regs/profile), pattern RAM starts at 0x120 (4 regs/profile).
+#define TX7332_DELAY_DATA_START        0x20
+#define TX7332_DELAY_DATA_END          0x11F
+#define TX7332_PATTERN_DATA_START      0x120
+#define TX7332_PATTERN_DATA_END        0x19F
+#define TX7332_DELAY_PROFILE_OFFSET    16
+#define TX7332_PATTERN_PROFILE_OFFSET  4
 
 // Pre-computed apodization register values from SDK, one uint32 per chip per profile.
 extern uint32_t apod_registers[MAX_PROFILES][TX_PER_MODULE];
