@@ -158,8 +158,8 @@ void reset_profile_cycle_to_start(void)
 	apply_next_profile_in_cycle();
 }
 
-static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
-static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id);
+static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
+static void process_i2c_forward(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
 
 static void print_uart_packet(const UartPacket* packet) {
     printf("ID: 0x%04X\r\n", packet->id);
@@ -175,7 +175,7 @@ static void print_uart_packet(const UartPacket* packet) {
 }
 
 
-static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id)
+static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id)
 {
 	uint16_t rx_len = 0;
 	uint8_t slave_addr = ModuleManager_GetModule(module_id)->i2c_address;
@@ -216,7 +216,7 @@ static void process_i2c_read_buffer(UartPacket *uartResp, UartPacket* cmd, uint8
 	}
 }
 
-static void process_i2c_forward(UartPacket *uartResp, UartPacket* cmd, uint8_t module_id)
+static void process_i2c_forward(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id)
 {
 	I2C_TX_Packet send_i2c_packet;
 	uint16_t send_len = 0;
