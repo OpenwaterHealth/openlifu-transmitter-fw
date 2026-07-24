@@ -1,5 +1,6 @@
 #include "trigger.h"
 #include "main.h"
+#include "if_commands.h"
 
  #include "jsmn.h"
 
@@ -24,6 +25,13 @@ static volatile OW_TimerData _timerDataConfig = {
 		.TriggerStatus = TRIGGER_STATUS_NOT_CONFIGURED
 };
 
+// Auto-cycle state for pulse-level profile switching
+static AutoCycleContext_t _auto_cycle = {
+	.state = AUTO_CYCLE_IDLE,
+	.is_active = false,
+	.pulses_per_profile = 0,
+	.pulse_counter_in_profile = 0,
+};
 
 
 static int jsoneq(const char *json, const jsmntok_t *tok, const char *s) {
@@ -298,6 +306,25 @@ bool set_trigger_data(const char *jsonString, size_t str_len)
 	 return ret;
 }
 
+// Park the trigger output as a push-pull GPIO driven low. HAL_TIM_PWM_Stop
+// clears MOE, and with OSSI disabled the TIM15 output is left high-impedance;
+// the floating line can then couple from the switching TX stage and
+// self-retrigger the TX7332. Driving it low holds the trigger inactive. The
+// next start_trigger_pulse() restores AF mode via Configure_ONESHOT_Timer().
+static void trigger_pin_park_low(void)
+{
+	 HAL_GPIO_DeInit(TRIGGER_GPIO_Port, TRIGGER_Pin);
+
+	 GPIO_InitTypeDef GPIO_InitStruct = {0};
+	 GPIO_InitStruct.Pin = TRIGGER_Pin;
+	 GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	 GPIO_InitStruct.Pull = GPIO_NOPULL;
+	 GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	 HAL_GPIO_Init(TRIGGER_GPIO_Port, &GPIO_InitStruct);
+
+	 HAL_GPIO_WritePin(TRIGGER_GPIO_Port, TRIGGER_Pin, GPIO_PIN_RESET);
+}
+
 void deinit_trigger(void)
  {
 	 /* USER CODE BEGIN TIM15_DeInit 0 */
@@ -316,19 +343,8 @@ void deinit_trigger(void)
 		 Error_Handler();
 	 }
 
-	 /* 3. Deinitialize GPIO pin used for TIM15 Channel 4 */
-	 HAL_GPIO_DeInit(TRIGGER_GPIO_Port, TRIGGER_Pin);
-
-	 /* 4. Reconfigure the GPIO pin as a general output pin */
-	 GPIO_InitTypeDef GPIO_InitStruct = {0};
-	 GPIO_InitStruct.Pin = TRIGGER_Pin;
-	 GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	 GPIO_InitStruct.Pull = GPIO_NOPULL;
-	 GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	 HAL_GPIO_Init(TRIGGER_GPIO_Port, &GPIO_InitStruct);
-
-	 /* 5. Set the pin to low */
-	 HAL_GPIO_WritePin(TRIGGER_GPIO_Port, TRIGGER_Pin, GPIO_PIN_RESET);
+	 /* 3. Park the trigger pin low (GPIO output) */
+	 trigger_pin_park_low();
 
 	 /* USER CODE BEGIN TIM15_DeInit 1 */
 
@@ -364,6 +380,73 @@ uint8_t get_trigger_status(void)
 	return (uint8_t)_timerDataConfig.TriggerStatus;
 }
 
+uint32_t get_trigger_pulse_count(void)
+{
+	return _timerDataConfig.TriggerPulseCount;
+}
+
+// Deferred profile switching.
+//
+// The trigger edge that raises the LORES_TIMER update interrupt is the same
+// hardware event that starts the TX7332 acoustic burst, which keeps sounding
+// for the host-programmed pattern duration - far longer than the trigger
+// pulse itself. Running the profile-switch SPI writes from the update
+// interrupt therefore lands them inside the burst, glitching the output.
+// Instead the ISRs only schedule an action here, and a LORES_TIMER compare
+// interrupt placed MIN_PROFILE_SWITCH_US before the next trigger edge
+// performs the writes in guaranteed dead time.
+#define PROFILE_ACTION_NONE   0
+#define PROFILE_ACTION_SWITCH 1  // apply the next profile in the execution order
+#define PROFILE_ACTION_RESET  2  // restart the execution order from the beginning
+static volatile uint8_t _pending_profile_action = PROFILE_ACTION_NONE;
+
+static void schedule_profile_action(uint8_t action)
+{
+    uint32_t arr = LORES_TIMER.Instance->ARR;
+    uint32_t psc = LORES_TIMER.Instance->PSC;
+    // Timer ticks in MIN_PROFILE_SWITCH_US at the 48 MHz timer clock.
+    uint32_t lead_ticks = (MIN_PROFILE_SWITCH_US * 48) / (psc + 1);
+    // Fire the compare just before the next update; if the period is too
+    // short to hold the lead time (blocked by start_trigger_pulse validation),
+    // fall back to firing as soon as possible.
+    uint32_t compare = (lead_ticks < arr) ? (arr - lead_ticks) : 1;
+
+    _pending_profile_action = action;
+    __HAL_TIM_SET_COMPARE(&LORES_TIMER, TIM_CHANNEL_1, compare);
+    __HAL_TIM_CLEAR_FLAG(&LORES_TIMER, TIM_FLAG_CC1);
+    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_CC1);
+}
+
+static void cancel_profile_action(void)
+{
+    __HAL_TIM_DISABLE_IT(&LORES_TIMER, TIM_IT_CC1);
+    __HAL_TIM_CLEAR_FLAG(&LORES_TIMER, TIM_FLAG_CC1);
+    _pending_profile_action = PROFILE_ACTION_NONE;
+}
+
+// LORES_TIMER compare interrupt: runs the scheduled profile action late in
+// the trigger period (routed here from TIM1_CC_IRQHandler via the HAL).
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance != LORES_TIMER.Instance) return;
+
+    uint8_t action = _pending_profile_action;
+    cancel_profile_action();
+
+    if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING || !_auto_cycle.is_active) {
+        return;
+    }
+
+    if (action == PROFILE_ACTION_SWITCH) {
+        if (!apply_next_profile_in_cycle()) {
+            _auto_cycle.state = AUTO_CYCLE_ERROR;
+            _auto_cycle.is_active = false;
+        }
+    } else if (action == PROFILE_ACTION_RESET) {
+        reset_profile_cycle_to_start();
+    }
+}
+
 uint8_t start_trigger_pulse(void) {
     if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY) return _timerDataConfig.TriggerStatus;
 
@@ -377,6 +460,15 @@ uint8_t start_trigger_pulse(void) {
         return TRIGGER_STATUS_ERROR;
     }
 
+    // Validate: If auto-cycle is active, inter-pulse dead time must be sufficient for SPI writes
+    if (_auto_cycle.is_active) {
+        uint32_t dead_time_us = triggerPeriodUsec - _timerDataConfig.TriggerPulseWidthUsec;
+        if (dead_time_us < MIN_PROFILE_SWITCH_US) {
+            _timerDataConfig.TriggerStatus = TRIGGER_STATUS_ERROR;
+            return TRIGGER_STATUS_ERROR;
+        }
+    }
+
     // Validate: Pulse train interval must be 0 or large enough to contain the full pulse train
     if (_timerDataConfig.TriggerPulseTrainInterval > 0 &&
         _timerDataConfig.TriggerPulseTrainInterval < triggerPeriodUsec * _timerDataConfig.TriggerPulseCount) {
@@ -386,6 +478,7 @@ uint8_t start_trigger_pulse(void) {
 
     _pulseCount = 0;
     _trainCount = 0;
+    cancel_profile_action();
 
     Configure_ONESHOT_Timer(&TRIGGER_TIMER, _timerDataConfig.TriggerPulseWidthUsec);
     Configure_TIMERS_Frequency(&LORES_TIMER, _timerDataConfig.TriggerFrequencyHz, false);
@@ -424,6 +517,9 @@ uint8_t stop_trigger_pulse(void) {
     HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
     HAL_TIM_Base_Stop_IT(&LORES_TIMER);
     HAL_TIM_Base_Stop_IT(&HIRES_TIMER);
+    cancel_profile_action();
+    // Hold the trigger line low so it can't float and self-retrigger the TX7332.
+    trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
     return TRIGGER_STATUS_READY;
 }
@@ -446,6 +542,13 @@ void TRIG_TIM2_IRQHandler(void) {
         sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount );
 	}else{
 	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
+
+	    // Reset pulse-level profile cycling for the new pulse train
+	    if (_auto_cycle.is_active) {
+	        _auto_cycle.pulse_counter_in_profile = 0;
+	        schedule_profile_action(PROFILE_ACTION_RESET);
+	    }
+
 	    _pulseCount = 0;
 	    HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
 	    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
@@ -462,6 +565,19 @@ void TRIG_TIM1_IRQHandler(void) {
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return;
 
     _pulseCount++;
+
+    // Pulse-level profile switching: the trigger edge that raised this
+    // interrupt also started an acoustic burst that keeps sounding for the
+    // TX7332 pattern duration, so the SPI writes are deferred to the compare
+    // interrupt late in this trigger period (see schedule_profile_action).
+    if (_auto_cycle.is_active) {
+        _auto_cycle.pulse_counter_in_profile++;
+        if (_auto_cycle.pulse_counter_in_profile >= _auto_cycle.pulses_per_profile
+            && _pulseCount < _timerDataConfig.TriggerPulseCount) {
+            _auto_cycle.pulse_counter_in_profile = 0;
+            schedule_profile_action(PROFILE_ACTION_SWITCH);
+        }
+    }
 
 	if(_timerDataConfig.TriggerPulseTrainInterval == 0 && _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS){
 		// do anything needed here
@@ -487,6 +603,14 @@ void TRIG_TIM1_IRQHandler(void) {
 				}
 				HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
 				_pulseCount = 0;
+
+				// Reset pulse-level profile cycling for the new pulse train
+				// (deferred: the final pulse's burst is still sounding here)
+				if (_auto_cycle.is_active) {
+				    _auto_cycle.pulse_counter_in_profile = 0;
+				    schedule_profile_action(PROFILE_ACTION_RESET);
+				}
+
 				HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
 				__HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
 				HAL_TIM_Base_Start_IT(&LORES_TIMER);
@@ -496,4 +620,34 @@ void TRIG_TIM1_IRQHandler(void) {
     	}
     }
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
+}
+
+void auto_cycle_start(uint32_t pulses_per_profile)
+{
+	_auto_cycle.state = AUTO_CYCLE_RUNNING;
+	_auto_cycle.is_active = true;
+	_auto_cycle.pulses_per_profile = pulses_per_profile;
+	_auto_cycle.pulse_counter_in_profile = 0;
+}
+
+void auto_cycle_stop(void)
+{
+	_auto_cycle.state = AUTO_CYCLE_IDLE;
+	_auto_cycle.is_active = false;
+	_auto_cycle.pulse_counter_in_profile = 0;
+}
+
+bool auto_cycle_is_active(void)
+{
+	return _auto_cycle.is_active;
+}
+
+AutoCycleState_e auto_cycle_get_state(void)
+{
+	return _auto_cycle.state;
+}
+
+void auto_cycle_reset_pulse_counter(void)
+{
+	_auto_cycle.pulse_counter_in_profile = 0;
 }

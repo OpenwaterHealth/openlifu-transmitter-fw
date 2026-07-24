@@ -22,4 +22,8 @@
 
 bool process_if_command(UartPacket *cmd, UartPacket *resp);
 
+// Profile auto-cycle hooks, called from the trigger ISRs in trigger.c.
+bool apply_next_profile_in_cycle(void);
+void reset_profile_cycle_to_start(void);
+
 #endif /* INC_IF_COMMANDS_H_ */
