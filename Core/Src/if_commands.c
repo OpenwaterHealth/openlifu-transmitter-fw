@@ -219,7 +219,6 @@ static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd,
 static void process_i2c_forward(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id)
 {
 	I2C_TX_Packet send_i2c_packet;
-	uint16_t send_len = 0;
 	uint8_t slave_addr = 0;
 	int local_tx_idx = 0;
 
@@ -269,7 +268,7 @@ static void process_i2c_forward(UartPacket *uartResp, const UartPacket* cmd, uin
 		send_i2c_packet.data_len = cmd->data_len;
 		send_i2c_packet.pData = cmd->data;
 
-		send_len = i2c_packet_toBuffer(&send_i2c_packet, send_buff);  // rebuild buffer
+		uint16_t send_len = i2c_packet_toBuffer(&send_i2c_packet, send_buff);  // rebuild buffer
 
 		if(send_buffer_to_slave_global(slave_addr, send_buff, send_len) != 0) { // send buffer to slave
 			uartResp->packet_type = OW_ERROR;
@@ -616,7 +615,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uint8_t n_profiles = profile_cycle.exec_order_len;
 
 				if (pulse_count == 0 || (pulse_count % n_profiles) != 0) {
-					printf("[AUTO_CYCLE] ERROR: pulse_count %lu not divisible by %u profiles\r\n",
+					printf("[AUTO_CYCLE] ERROR: pulse_count %u not divisible by %u profiles\r\n",
 					       pulse_count, n_profiles);
 					uartResp->packet_type = OW_ERROR;
 					break;
@@ -1019,7 +1018,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			profile_cycle.current_exec_index = 0;
 
 			// Extract execution_order indices (1-based)
-			uint8_t *exec_order_ptr = &payload[PROFILE_CYCLE_HEADER_LEN];
+			const uint8_t *exec_order_ptr = &payload[PROFILE_CYCLE_HEADER_LEN];
 			for (uint8_t i = 0; i < exec_order_len; i++) {
 				uint8_t profile_idx = exec_order_ptr[i];
 				if (profile_idx < 1 || profile_idx > n_profiles) {
