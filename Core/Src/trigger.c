@@ -426,6 +426,7 @@ static void cancel_profile_action(void)
 
 // LORES_TIMER compare interrupt: runs the scheduled profile action late in
 // the trigger period (routed here from TIM1_CC_IRQHandler via the HAL).
+// cppcheck-suppress constParameterPointer
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance != LORES_TIMER.Instance) return;
