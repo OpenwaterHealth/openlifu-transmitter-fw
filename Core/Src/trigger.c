@@ -12,6 +12,7 @@
 // Internal state variables
 static volatile uint32_t _pulseCount = 0;
 static volatile uint32_t _trainCount = 0;
+static volatile bool _stop_pending = false;
 
 static volatile OW_TimerData _timerDataConfig = {
 		.TriggerFrequencyHz = 0,
@@ -153,12 +154,16 @@ static void Configure_TIMERS_Frequency(TIM_HandleTypeDef* htim, uint32_t frequen
         arr = 0xFFFF;
     }
 
-    // Reset and prepare TIM15
+    // Reset and prepare the timer
     __HAL_TIM_DISABLE(htim);
     __HAL_TIM_SET_COUNTER(htim, 0);
 
     htim->Instance->PSC = prescaler;
     htim->Instance->ARR = arr;
+
+	// Fix for first pulse count sequence being off by 1 when board first powers on. 
+	// Force an update event so the new PSC/ARR values take effect immediately.
+    htim->Instance->EGR = TIM_EGR_UG;
 
     // Clear interrupt flags
     __HAL_TIM_CLEAR_FLAG(htim, TIM_FLAG_UPDATE);
@@ -233,6 +238,13 @@ static void Configure_ONESHOT_Timer(TIM_HandleTypeDef* htim, uint16_t pulsewidth
 	  {
 	    Error_Handler();
 	  }
+
+	  // Fix for first pulse width being wrong when board first powers on.
+	  // Force an update event so the new CCR (pulse width) value takes effect immediately.
+	  __HAL_TIM_DISABLE(htim);
+	  htim->Instance->EGR = TIM_EGR_UG;
+	  __HAL_TIM_CLEAR_FLAG(htim, TIM_FLAG_UPDATE);
+
 	  /* USER CODE BEGIN TIM15_Init 2 */
 
 	  /* USER CODE END TIM15_Init 2 */
@@ -479,6 +491,8 @@ uint8_t start_trigger_pulse(void) {
 
     _pulseCount = 0;
     _trainCount = 0;
+    _stop_pending = false;
+    __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
     cancel_profile_action();
 
     Configure_ONESHOT_Timer(&TRIGGER_TIMER, _timerDataConfig.TriggerPulseWidthUsec);
@@ -493,7 +507,11 @@ uint8_t start_trigger_pulse(void) {
     __HAL_TIM_CLEAR_FLAG(&HIRES_TIMER, TIM_FLAG_UPDATE);
     __HAL_TIM_CLEAR_FLAG(&LORES_TIMER, TIM_FLAG_UPDATE);
 
-    __HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);  // Just in case
+    // Fix for the one-shot ignoring the first trigger and skipping the first pulse.
+    // Force it idle because the LORES update event above may have trigger-started it.
+    __HAL_TIM_DISABLE(&TRIGGER_TIMER);
+    __HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
+    __HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_UPDATE);
     __HAL_TIM_SET_COUNTER(&LORES_TIMER, 0);
     __HAL_TIM_SET_COUNTER(&HIRES_TIMER, 0);
 
@@ -516,13 +534,47 @@ uint8_t stop_trigger_pulse(void) {
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return _timerDataConfig.TriggerStatus;
 
     HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
+    __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
     HAL_TIM_Base_Stop_IT(&LORES_TIMER);
     HAL_TIM_Base_Stop_IT(&HIRES_TIMER);
     cancel_profile_action();
+    _stop_pending = false;
     // Hold the trigger line low so it can't float and self-retrigger the TX7332.
     trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
     return TRIGGER_STATUS_READY;
+}
+
+static void finish_sequence(void)
+{
+	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
+	_stop_pending = false;
+	stop_trigger_pulse();
+	sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount);
+}
+
+// The ISRs fire as soon as the last pulse starts. 
+// If we stop the PWM there the pulse is truncated and the line is
+// left floating. Since the one-shot re-arms itself it's not stopped mid-run
+// on purpose. Instead, this arms the end-of-cycle update interrupt and then
+// TRIG_ONESHOT_IRQHandler handles the stop/park.
+static void stop_after_final_pulse(void)
+{
+	_stop_pending = true;
+	__HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_UPDATE);
+	__HAL_TIM_ENABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
+	// Pulse already finished, so wrap things up now. finish_sequence() will
+	// disable the interrupt so if a completion occurs between the clear and enable above, 
+	// the ISR is handled correctly.
+	if (!(TRIGGER_TIMER.Instance->CR1 & TIM_CR1_CEN)) finish_sequence();
+}
+
+// TRIGGER_TIMER update: only armed by stop_after_final_pulse(), so this is the
+// sequence's final pulse finishing. Routed from HAL_TIM_PeriodElapsedCallback.
+void TRIG_ONESHOT_IRQHandler(void)
+{
+	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
+	if (_stop_pending) finish_sequence();
 }
 
 void TRIG_TIM2_IRQHandler(void) {
@@ -531,16 +583,14 @@ void TRIG_TIM2_IRQHandler(void) {
     __HAL_TIM_DISABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
     HAL_TIM_Base_Stop_IT(&HIRES_TIMER);
 
-    HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
+    // One-shot PWM deliberately not stopped here.
 
 	_trainCount++;
     if(_timerDataConfig.TriggerMode == TRIGGER_MODE_SINGLE) {
-        stop_trigger_pulse();
-        sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount );
+        stop_after_final_pulse();
         return;
     }else if(_trainCount>=_timerDataConfig.TriggerPulseTrainCount &&  _timerDataConfig.TriggerMode != TRIGGER_MODE_CONTINUOUS) {
-        stop_trigger_pulse();
-        sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount );
+        stop_after_final_pulse();
 	}else{
 	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
 
@@ -551,7 +601,6 @@ void TRIG_TIM2_IRQHandler(void) {
 	    }
 
 	    _pulseCount = 0;
-	    HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
 	    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
 	    HAL_TIM_Base_Start_IT(&LORES_TIMER);
 
@@ -592,17 +641,15 @@ void TRIG_TIM1_IRQHandler(void) {
 			_trainCount++;
         	if(_timerDataConfig.TriggerMode == TRIGGER_MODE_SINGLE)
         	{
-		        stop_trigger_pulse();
-		        sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount );
+		        stop_after_final_pulse();
         		return;
         	} else {
 				if (_timerDataConfig.TriggerMode == TRIGGER_MODE_SEQUENCE &&
 					_trainCount >= _timerDataConfig.TriggerPulseTrainCount) {
-					stop_trigger_pulse();
-					sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount);
+					stop_after_final_pulse();
 					return;
 				}
-				HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
+				// Back-to-back restart, one-shot PWM deliberately not stopped here.
 				_pulseCount = 0;
 
 				// Reset pulse-level profile cycling for the new pulse train
@@ -612,7 +659,6 @@ void TRIG_TIM1_IRQHandler(void) {
 				    schedule_profile_action(PROFILE_ACTION_RESET);
 				}
 
-				HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
 				__HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
 				HAL_TIM_Base_Start_IT(&LORES_TIMER);
 				pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);

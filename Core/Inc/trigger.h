@@ -74,6 +74,7 @@ const char* get_trigger_mode_str(void);
 
 void TRIG_TIM2_IRQHandler(void);
 void TRIG_TIM1_IRQHandler(void);
+void TRIG_ONESHOT_IRQHandler(void);
 void print_OW_TimerData(const OW_TimerData *data);
 
 // Auto-cycle API: pulse-level profile switching driven from the trigger ISRs.

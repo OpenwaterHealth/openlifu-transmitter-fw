@@ -615,8 +615,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uint8_t n_profiles = profile_cycle.exec_order_len;
 
 				if (pulse_count == 0 || (pulse_count % n_profiles) != 0) {
-					printf("[AUTO_CYCLE] ERROR: pulse_count %u not divisible by %u profiles\r\n",
-					       pulse_count, n_profiles);
 					uartResp->packet_type = OW_ERROR;
 					break;
 				}

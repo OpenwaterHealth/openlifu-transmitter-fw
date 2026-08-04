@@ -1752,6 +1752,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     TRIG_TIM2_IRQHandler();
   }
 
+  if (htim->Instance == TRIGGER_TIMER.Instance)
+  {
+    TRIG_ONESHOT_IRQHandler(); // Pulse-complete event, armed only at sequence end (trigger.c).
+  }
+
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM6)
   {
