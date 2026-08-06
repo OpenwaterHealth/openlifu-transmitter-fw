@@ -595,8 +595,6 @@ void TRIG_TIM2_IRQHandler(void) {
     }else if(_trainCount>=_timerDataConfig.TriggerPulseTrainCount &&  _timerDataConfig.TriggerMode != TRIGGER_MODE_CONTINUOUS) {
         stop_after_final_pulse();
 	}else{
-	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
-
 	    // Reset pulse-level profile cycling for the new pulse train
 	    if (_auto_cycle.is_active) {
 	        _auto_cycle.pulse_counter_in_profile = 0;
@@ -611,6 +609,9 @@ void TRIG_TIM2_IRQHandler(void) {
             __HAL_TIM_ENABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
             HAL_TIM_Base_Start_IT(&HIRES_TIMER);
         }
+
+	    // Report after restarting timers since in async mode this blocks ~1 ms on USB.
+	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
 	}
 }
 
