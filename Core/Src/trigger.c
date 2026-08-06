@@ -531,14 +531,19 @@ uint8_t start_trigger_pulse(void) {
 }
 
 uint8_t stop_trigger_pulse(void) {
+    // Disarm before doing anything to avoid race condition - if there 
+	// is a forced stop (overheat, STOP command) from the main loop while 
+	// stop_after_final_pulse() has armed the TRIGGER_TIMER update interrupt, 
+	// the ISR could run finish_sequence() mid-stop and report a completed sequence.
+    __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
+    _stop_pending = false;
+
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return _timerDataConfig.TriggerStatus;
 
     HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
-    __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
     HAL_TIM_Base_Stop_IT(&LORES_TIMER);
     HAL_TIM_Base_Stop_IT(&HIRES_TIMER);
     cancel_profile_action();
-    _stop_pending = false;
     // Hold the trigger line low so it can't float and self-retrigger the TX7332.
     trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
@@ -547,9 +552,7 @@ uint8_t stop_trigger_pulse(void) {
 
 static void finish_sequence(void)
 {
-	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
-	_stop_pending = false;
-	stop_trigger_pulse();
+	stop_trigger_pulse(); // disables update interrupt and clears _stop_pending
 	sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount);
 }
 
