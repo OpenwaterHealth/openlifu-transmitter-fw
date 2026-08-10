@@ -921,56 +921,64 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		}
 		case OW_CTRL_SET_DELAY_PROFILE:
 		{
-			uartResp->command = cmd->command;
-			uartResp->addr = cmd->addr;
-			uartResp->reserved = cmd->reserved;
-			uartResp->data_len = 0;
+			if (module_id == 0x00){
+				uartResp->command = cmd->command;
+				uartResp->addr = cmd->addr;
+				uartResp->reserved = cmd->reserved;
+				uartResp->data_len = 0;
 
-			if (cmd->addr >= get_tx_chip_count()) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
+				if (cmd->addr >= get_tx_chip_count()) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
 
-			if (cmd->data_len < 1U) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
+				if (cmd->data_len < 1U) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
 
-			uint8_t profile = *((uint8_t *)cmd->data);
-			if (!IsValidProfile(profile)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
+				uint8_t profile = *((uint8_t *)cmd->data);
+				if (!IsValidProfile(profile)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
 
 			for (uint8_t i = 0; i < get_tx_chip_count(); i++) {
-				TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
+					TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
+				}
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
 
 			break;
 		}
 		case OW_CTRL_GET_DELAY_PROFILE:
 		{
-			uartResp->command = cmd->command;
-			uartResp->addr = cmd->addr;
-			uartResp->reserved = cmd->reserved;
-			uartResp->data_len = 0;
+			if (module_id == 0x00){	
+				uartResp->command = cmd->command;
+				uartResp->addr = cmd->addr;
+				uartResp->reserved = cmd->reserved;
+				uartResp->data_len = 0;
 
-			if (cmd->addr >= get_tx_chip_count()) {
-				uartResp->packet_type = OW_ERROR;
-				return;
+				if (cmd->addr >= get_tx_chip_count()) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				uint8_t profile = 0U;
+				if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile) ||
+					!IsValidProfile(profile)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				selected_profile_response = profile;
+				uartResp->data = &selected_profile_response;
+				uartResp->data_len = 1;
+				break;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
-
-			uint8_t profile = 0U;
-			if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile) ||
-				!IsValidProfile(profile)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
-
-			selected_profile_response = profile;
-			uartResp->data = &selected_profile_response;
-			uartResp->data_len = 1;
-			break;
 		}
 		case OW_CTRL_SET_PROFILE_CYCLE:
 		{
