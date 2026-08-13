@@ -136,9 +136,9 @@ bool apply_next_profile_in_cycle(void)
 	}
 
 	// Apply delay profile, pattern profile (0-based selector on-chip), and
-	// apodization to all TX chips, then commit with the self-clearing LOAD_PROF bit.
-	uint8_t tx_count = get_tx_chip_count();
-	for (uint8_t txi = 0; txi < tx_count; txi++) {
+	// apodization to this module's TX chips, then commit with the self-clearing
+	// LOAD_PROF bit. Slaves run this same code against their own transmitters[].
+	for (uint8_t txi = 0; txi < TX_PER_MODULE; txi++) {
 		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi], txi);
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G2, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
@@ -506,6 +506,95 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 	}
 }
 
+static uint32_t read_le32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// Arm (or disarm) pulse-level profile cycling on every slave module.
+//
+// Only the master generates a trigger, but the trigger net is shared, so each
+// module can advance its own execution order off the same edge. That has to be
+// set up here, at START_SWTRIG: a forwarded I2C round trip costs ~50 ms and
+// could never land inside the MIN_PROFILE_SWITCH_US dead time between pulses.
+// Returns false if any module refused to arm.
+static bool set_slave_profile_cycles(bool arm, uint32_t pulses_per_profile)
+{
+	static uint8_t arm_payload[CYCLE_ARM_PAYLOAD_LEN];
+	UartPacket fwd;
+	UartPacket fwd_resp;
+	bool ok = true;
+
+	uint32_t period_us = get_trigger_period_us();
+	uint32_t pulse_count = get_trigger_pulse_count();
+	uint32_t train_count = 0;
+	uint8_t flags = 0;
+
+	// Where the sequence ends, so followers hold the last profile exactly like
+	// the master does instead of resetting to the top of the order. Continuous
+	// mode leaves this at 0: it never ends.
+	switch (get_trigger_mode()) {
+	case TRIGGER_MODE_SINGLE:
+		train_count = 1;
+		break;
+	case TRIGGER_MODE_CONTINUOUS:
+		train_count = 0;
+		break;
+	default:
+		train_count = get_trigger_pulse_train_count();
+		break;
+	}
+
+	// Free-running continuous mode never closes a train, and the master stops
+	// switching once it has issued TriggerPulseCount pulses; tell the followers
+	// so they stop on the same pulse instead of cycling on alone.
+	if (get_trigger_mode() == TRIGGER_MODE_CONTINUOUS && get_trigger_pulse_train_interval() == 0) {
+		flags |= CYCLE_ARM_FLAG_STOP_AFTER_TRAIN;
+	}
+
+	if (arm && (period_us == 0 || pulses_per_profile == 0)) {
+		return false;
+	}
+
+	arm_payload[0] = (uint8_t)(pulses_per_profile);
+	arm_payload[1] = (uint8_t)(pulses_per_profile >> 8);
+	arm_payload[2] = (uint8_t)(pulses_per_profile >> 16);
+	arm_payload[3] = (uint8_t)(pulses_per_profile >> 24);
+	arm_payload[4] = (uint8_t)(pulse_count);
+	arm_payload[5] = (uint8_t)(pulse_count >> 8);
+	arm_payload[6] = (uint8_t)(pulse_count >> 16);
+	arm_payload[7] = (uint8_t)(pulse_count >> 24);
+	arm_payload[8] = (uint8_t)(train_count);
+	arm_payload[9] = (uint8_t)(train_count >> 8);
+	arm_payload[10] = (uint8_t)(train_count >> 16);
+	arm_payload[11] = (uint8_t)(train_count >> 24);
+	arm_payload[12] = (uint8_t)(period_us);
+	arm_payload[13] = (uint8_t)(period_us >> 8);
+	arm_payload[14] = (uint8_t)(period_us >> 16);
+	arm_payload[15] = (uint8_t)(period_us >> 24);
+	arm_payload[16] = flags;
+
+	for (uint8_t m = 1; m < get_module_count(); m++) {
+		memset(&fwd, 0, sizeof(fwd));
+		memset(&fwd_resp, 0, sizeof(fwd_resp));
+
+		fwd.packet_type = OW_CONTROLLER;
+		fwd.command = OW_CTRL_ARM_PROFILE_CYCLE;
+		fwd.addr = m;
+		fwd.reserved = arm ? 1U : 0U;   // slave reads this as arm/disarm
+		fwd.data_len = arm ? CYCLE_ARM_PAYLOAD_LEN : 0U;
+		fwd.data = arm ? arm_payload : NULL;
+
+		process_i2c_forward(&fwd_resp, &fwd, m);
+		if (fwd_resp.packet_type == OW_ERROR) {
+			printf("[AUTO_CYCLE] module %u refused to %s\r\n", m, arm ? "arm" : "disarm");
+			ok = false;
+		}
+	}
+
+	return ok;
+}
+
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 {
 	uint8_t module_id = 0;
@@ -628,12 +717,22 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 					break;
 				}
 
+				// Slaves never see this command, and they cannot be told
+				// per-pulse over I2C either; arm them to follow the shared
+				// trigger line before the first edge goes out.
+				if (!set_slave_profile_cycles(true, pulses_per_profile)) {
+					(void)set_slave_profile_cycles(false, 0);
+					uartResp->packet_type = OW_ERROR;
+					break;
+				}
+
 				// Start pulse-level auto-cycle
 				if (!tx_overheat_flag) {
 					auto_cycle_start(pulses_per_profile);
 					if (start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
 						uartResp->packet_type = OW_ERROR;
 						auto_cycle_stop();
+						(void)set_slave_profile_cycles(false, 0);
 					}
 				}
 			} else {
@@ -656,6 +755,12 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Stop auto-cycle if active
 			if (auto_cycle_is_active()) {
 				auto_cycle_stop();
+			}
+
+			// Followers self-disarm on the trigger gap, but do it explicitly so
+			// they cannot react to a stray edge before the next sequence.
+			if (profile_cycle.is_configured) {
+				(void)set_slave_profile_cycles(false, 0);
 			}
 			break;
 		case OW_CTRL_SET_SWTRIG:
@@ -875,18 +980,27 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
+			if (module_id != 0) {
+				process_i2c_forward(uartResp, cmd, module_id);
+				break;
+			}
+
 			uint8_t profile = cmd->data[0];
 			if (!IsValidProfile(profile)) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			// Pattern profile selector is 0-based in the TX7332 registers.
-			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
-			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+			// addr selects the module, so apply to both of its chips - same
+			// scope as SET_DELAY_PROFILE and as the auto-cycle switch.
+			for (uint8_t i = 0; i < TX_PER_MODULE; i++) {
+				// Pattern profile selector is 0-based in the TX7332 registers.
+				TX7332_WriteReg(&transmitters[i], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+				TX7332_WriteReg(&transmitters[i], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 
-			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
-			TX7332_LoadProfile(&transmitters[cmd->addr]);
+				// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
+				TX7332_LoadProfile(&transmitters[i]);
+			}
 
 			break;
 		}
@@ -902,8 +1016,15 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1);
-			uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2);
+			cmd->data_len = 1; //passing amount to read if forwarding to slave
+			if (module_id != 0) {
+				process_i2c_forward(uartResp, cmd, module_id);
+				break;
+			}
+
+			// Both chips of a module track the same selector (see the setter).
+			uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[0], PATTERN_PROFILE_SELECT_REG_G1);
+			uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[0], PATTERN_PROFILE_SELECT_REG_G2);
 
 			uint8_t pattern_g1 = (uint8_t)(pattern_sel_g1 & PATTERN_PROFILE_SELECT_MASK);
 			uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
@@ -943,7 +1064,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 					return;
 				}
 
-			for (uint8_t i = 0; i < get_tx_chip_count(); i++) {
+				// This module's chips only; slaves apply their own via the forward.
+				for (uint8_t i = 0; i < TX_PER_MODULE; i++) {
 					TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
 				}
 			} else {
@@ -979,6 +1101,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			} else {
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
+			break;
 		}
 		case OW_CTRL_SET_PROFILE_CYCLE:
 		{
@@ -992,6 +1115,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			if (auto_cycle_is_active()) {
 				uartResp->packet_type = OW_ERROR;
 				return;
+			}
+
+			// Every module keeps its own copy of the execution order and its own
+			// two chips' apodization, so the host configures each module in turn
+			// (addr = module index, n_chips <= TX_PER_MODULE).
+			if (module_id != 0) {
+				process_i2c_forward(uartResp, cmd, module_id);
+				break;
 			}
 
 			if (cmd->data_len < PROFILE_CYCLE_HEADER_LEN) {
@@ -1049,6 +1180,48 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			profile_cycle.is_configured = true;
 
 			// Success response
+			break;
+		}
+		case OW_CTRL_ARM_PROFILE_CYCLE:
+		{
+			// Master -> slave only: reaches us as a forwarded I2C packet, which
+			// the slave sees as addr 0. Arms the trigger follower so this module
+			// advances the execution order the master just sent us, off the
+			// shared trigger line rather than off per-pulse commands.
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+
+			// Never on the master: it drives the trigger net, and disarming
+			// would hand its own trigger pin back to the follower as an input.
+			if (module_id != 0 || get_device_role() == ROLE_MASTER) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			if (cmd->reserved == 0) {
+				trigger_follower_disarm();
+				break;
+			}
+
+			if (cmd->data_len < CYCLE_ARM_PAYLOAD_LEN ||
+				!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			if (!trigger_follower_arm(read_le32(&cmd->data[0]),    // pulses per profile
+			                          read_le32(&cmd->data[4]),    // pulses per train
+			                          read_le32(&cmd->data[8]),    // trains per sequence
+			                          read_le32(&cmd->data[12]),   // trigger period
+			                          cmd->data[16])) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			// Start on the same profile the master applied before triggering.
+			reset_profile_cycle_to_start();
 			break;
 		}
 		default:

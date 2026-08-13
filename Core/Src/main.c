@@ -1754,7 +1754,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
   if (htim->Instance == TRIGGER_TIMER.Instance)
   {
-    TRIG_ONESHOT_IRQHandler(); // Pulse-complete event, armed only at sequence end (trigger.c).
+    // Means either a quiet trigger line or a pulse-complete, by role (trigger.c).
+    TRIG_TIM15_IRQHandler();
   }
 
   /* USER CODE END Callback 0 */

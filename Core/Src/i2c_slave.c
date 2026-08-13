@@ -157,6 +157,29 @@ void i2c_print_info() {
     printf("I2C Slave Addr: 0x%02x\r\n\r\n", (uint8_t)(GLOBAL_I2C_DEVICE->Init.OwnAddress1 >> 1));
 }
 
+// Command opcode -> packet type. The 0x20 / 0x00 nibbles map straight onto
+// TX7332 / global commands, but the controller commands the master forwards to
+// us do not live in one nibble (0x1D-0x1F alongside 0x28-0x2A), so they are
+// listed explicitly. Anything unrecognised is rejected rather than guessed.
+static uint8_t slave_packet_type_for(uint8_t command)
+{
+	switch (command) {
+	case OW_CTRL_SET_DELAY_PROFILE:
+	case OW_CTRL_GET_DELAY_PROFILE:
+	case OW_CTRL_SET_PROFILE_CYCLE:
+	case OW_CTRL_SET_PATTERN_PROFILE:
+	case OW_CTRL_GET_PATTERN_PROFILE:
+	case OW_CTRL_ARM_PROFILE_CYCLE:
+		return OW_CONTROLLER;
+	default:
+		break;
+	}
+
+	if ((command & 0xF0) == 0x20) return OW_TX7332;
+	if ((command & 0xF0) == 0x00) return OW_CMD;
+	return OW_ERROR;
+}
+
 void I2C_Process() {
 	if (!data_available) return;
 
@@ -169,12 +192,14 @@ void I2C_Process() {
 	new_cmd.id = data_available->id;
 
 	new_cmd.command = data_available->cmd;
+	new_cmd.packet_type = slave_packet_type_for(new_cmd.command);
 	/* For TX7332 commands data_available->reserved carries the local chip index
 	 * which CONTROLLER/TX7332_ProcessCommand expects in cmd->addr.
-	 * For all other (OW_CMD) commands the slave always processes for itself
+	 * For all other commands the slave always processes for itself
 	 * (module 0), so force addr=0 and only put the original reserved value in
-	 * new_cmd.reserved (e.g. 0=READ / 1=WRITE for USR_CFG). */
-	if ((data_available->cmd & 0xF0) == 0x20) {
+	 * new_cmd.reserved (e.g. 0=READ / 1=WRITE for USR_CFG, arm/disarm for
+	 * OW_CTRL_ARM_PROFILE_CYCLE). */
+	if (new_cmd.packet_type == OW_TX7332) {
 		new_cmd.addr = data_available->reserved;  // local TX chip index
 	} else {
 		new_cmd.addr = 0;                          // always self on slave
@@ -190,19 +215,6 @@ void I2C_Process() {
 
 	// clear data available buffer
 	data_available = NULL;
-
-	if((new_cmd.command & 0xF0) == 0x20)
-	{
-		new_cmd.packet_type = OW_TX7332;
-	}
-	else if((new_cmd.command & 0xF0) == 0x00)
-	{
-		new_cmd.packet_type = OW_CMD;
-	}
-	else
-	{
-		new_cmd.packet_type = OW_ERROR;
-	}
 
 	process_if_command(&new_cmd, &resp);
 
