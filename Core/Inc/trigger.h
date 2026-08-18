@@ -87,13 +87,13 @@ bool auto_cycle_is_active(void);
 AutoCycleState_e auto_cycle_get_state(void);
 void auto_cycle_reset_pulse_counter(void);
 
-// Trigger follower: slave-side mirror of the auto-cycle above. Slaves never
-// generate a trigger, they watch the master's shared trigger line and switch
-// their own chips in the same dead-time window. Armed over I2C at START_SWTRIG.
-bool trigger_follower_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
-                          uint32_t train_count, uint32_t period_us, uint8_t flags);
-void trigger_follower_disarm(void);
-bool trigger_follower_is_armed(void);
+// Slave-side mirror of the auto-cycle above. Slaves never generate a trigger,
+// they watch the master's shared trigger line and switch their own chips in the
+// same dead-time window. Armed over I2C at START_SWTRIG.
+bool trigger_slave_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
+                       uint32_t train_count, uint32_t period_us, uint8_t flags);
+void trigger_slave_disarm(void);
+bool trigger_slave_is_armed(void);
 void TRIG_TIM15_IRQHandler(void);
 
 // Weak callback functions

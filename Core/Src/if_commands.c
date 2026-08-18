@@ -511,26 +511,27 @@ static uint32_t read_le32(const uint8_t *p)
 	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-// Arm (or disarm) pulse-level profile cycling on every slave module.
-//
-// Only the master generates a trigger, but the trigger net is shared, so each
-// module can advance its own execution order off the same edge. That has to be
-// set up here, at START_SWTRIG: a forwarded I2C round trip costs ~50 ms and
-// could never land inside the MIN_PROFILE_SWITCH_US dead time between pulses.
-// Returns false if any module refused to arm.
-static bool set_slave_profile_cycles(bool arm, uint32_t pulses_per_profile)
+static void write_le32(uint8_t *p, uint32_t value)
 {
-	static uint8_t arm_payload[CYCLE_ARM_PAYLOAD_LEN];
-	UartPacket fwd;
-	UartPacket fwd_resp;
-	bool ok = true;
+	p[0] = (uint8_t)(value);
+	p[1] = (uint8_t)(value >> 8);
+	p[2] = (uint8_t)(value >> 16);
+	p[3] = (uint8_t)(value >> 24);
+}
 
+// Fill the OW_CTRL_ARM_PROFILE_CYCLE payload (layout in common.h) from the
+// master's live trigger config. False if the trigger cannot be mirrored.
+static bool build_cycle_arm_payload(uint8_t *payload, uint32_t pulses_per_profile)
+{
 	uint32_t period_us = get_trigger_period_us();
-	uint32_t pulse_count = get_trigger_pulse_count();
 	uint32_t train_count = 0;
 	uint8_t flags = 0;
 
-	// Where the sequence ends, so followers hold the last profile exactly like
+	if (period_us == 0 || pulses_per_profile == 0) {
+		return false;
+	}
+
+	// Where the sequence ends, so slaves hold the last profile exactly like
 	// the master does instead of resetting to the top of the order. Continuous
 	// mode leaves this at 0: it never ends.
 	switch (get_trigger_mode()) {
@@ -546,33 +547,38 @@ static bool set_slave_profile_cycles(bool arm, uint32_t pulses_per_profile)
 	}
 
 	// Free-running continuous mode never closes a train, and the master stops
-	// switching once it has issued TriggerPulseCount pulses; tell the followers
+	// switching once it has issued TriggerPulseCount pulses; tell the slaves
 	// so they stop on the same pulse instead of cycling on alone.
 	if (get_trigger_mode() == TRIGGER_MODE_CONTINUOUS && get_trigger_pulse_train_interval() == 0) {
 		flags |= CYCLE_ARM_FLAG_STOP_AFTER_TRAIN;
 	}
 
-	if (arm && (period_us == 0 || pulses_per_profile == 0)) {
+	write_le32(&payload[0], pulses_per_profile);
+	write_le32(&payload[4], get_trigger_pulse_count());
+	write_le32(&payload[8], train_count);
+	write_le32(&payload[12], period_us);
+	payload[16] = flags;
+
+	return true;
+}
+
+// Arm (or disarm) pulse-level profile cycling on every slave module.
+//
+// Only the master generates a trigger, but the trigger net is shared, so each
+// module can advance its own execution order off the same edge. That has to be
+// set up here, at START_SWTRIG: a forwarded I2C round trip costs ~50 ms and
+// could never land inside the MIN_PROFILE_SWITCH_US dead time between pulses.
+// Returns false if any module refused to arm.
+static bool set_slave_profile_cycles(bool arm, uint32_t pulses_per_profile)
+{
+	static uint8_t arm_payload[CYCLE_ARM_PAYLOAD_LEN];
+	UartPacket fwd;
+	UartPacket fwd_resp;
+	bool ok = true;
+
+	if (arm && !build_cycle_arm_payload(arm_payload, pulses_per_profile)) {
 		return false;
 	}
-
-	arm_payload[0] = (uint8_t)(pulses_per_profile);
-	arm_payload[1] = (uint8_t)(pulses_per_profile >> 8);
-	arm_payload[2] = (uint8_t)(pulses_per_profile >> 16);
-	arm_payload[3] = (uint8_t)(pulses_per_profile >> 24);
-	arm_payload[4] = (uint8_t)(pulse_count);
-	arm_payload[5] = (uint8_t)(pulse_count >> 8);
-	arm_payload[6] = (uint8_t)(pulse_count >> 16);
-	arm_payload[7] = (uint8_t)(pulse_count >> 24);
-	arm_payload[8] = (uint8_t)(train_count);
-	arm_payload[9] = (uint8_t)(train_count >> 8);
-	arm_payload[10] = (uint8_t)(train_count >> 16);
-	arm_payload[11] = (uint8_t)(train_count >> 24);
-	arm_payload[12] = (uint8_t)(period_us);
-	arm_payload[13] = (uint8_t)(period_us >> 8);
-	arm_payload[14] = (uint8_t)(period_us >> 16);
-	arm_payload[15] = (uint8_t)(period_us >> 24);
-	arm_payload[16] = flags;
 
 	for (uint8_t m = 1; m < get_module_count(); m++) {
 		memset(&fwd, 0, sizeof(fwd));
@@ -757,7 +763,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				auto_cycle_stop();
 			}
 
-			// Followers self-disarm on the trigger gap, but do it explicitly so
+			// Slaves self-disarm on the trigger gap, but do it explicitly so
 			// they cannot react to a stray edge before the next sequence.
 			if (profile_cycle.is_configured) {
 				(void)set_slave_profile_cycles(false, 0);
@@ -1185,7 +1191,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		case OW_CTRL_ARM_PROFILE_CYCLE:
 		{
 			// Master -> slave only: reaches us as a forwarded I2C packet, which
-			// the slave sees as addr 0. Arms the trigger follower so this module
+			// the slave sees as addr 0. Arms the trigger slave so this module
 			// advances the execution order the master just sent us, off the
 			// shared trigger line rather than off per-pulse commands.
 			uartResp->command = cmd->command;
@@ -1194,14 +1200,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->data_len = 0;
 
 			// Never on the master: it drives the trigger net, and disarming
-			// would hand its own trigger pin back to the follower as an input.
+			// would hand its own trigger pin back to the slave as an input.
 			if (module_id != 0 || get_device_role() == ROLE_MASTER) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
 			if (cmd->reserved == 0) {
-				trigger_follower_disarm();
+				trigger_slave_disarm();
 				break;
 			}
 
@@ -1211,7 +1217,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			if (!trigger_follower_arm(read_le32(&cmd->data[0]),    // pulses per profile
+			if (!trigger_slave_arm(read_le32(&cmd->data[0]),    // pulses per profile
 			                          read_le32(&cmd->data[4]),    // pulses per train
 			                          read_le32(&cmd->data[8]),    // trains per sequence
 			                          read_le32(&cmd->data[12]),   // trigger period

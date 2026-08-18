@@ -35,7 +35,7 @@ static AutoCycleContext_t _auto_cycle = {
 	.pulse_counter_in_profile = 0,
 };
 
-// Trigger-follower state (slave modules only, see the block near the bottom).
+// Trigger-slave state (slave modules only, see the block near the bottom).
 typedef struct {
 	bool armed;                    // TIM15 is watching the shared trigger line
 	bool cycling;                  // still advancing the execution order
@@ -46,11 +46,11 @@ typedef struct {
 	uint32_t pulse_in_train;
 	uint32_t trains_done;
 	uint32_t pulse_in_profile;
-} TriggerFollower_t;
+} TriggerSlave_t;
 
-static volatile TriggerFollower_t _follower = {0};
+static volatile TriggerSlave_t _slave = {0};
 
-static void follower_dead_time_tick(void);
+static void slave_dead_time_tick(void);
 
 
 static int jsoneq(const char *json, const jsmntok_t *tok, const char *s) {
@@ -475,11 +475,11 @@ static void cancel_profile_action(void)
 // cppcheck-suppress constParameterPointer
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    // On a follower the same dead-time window is timed off the trigger line by
+    // On a slave the same dead-time window is timed off the trigger line by
     // TRIGGER_TIMER instead of by our own period timer. The master never enables
     // a compare interrupt on TRIGGER_TIMER, so this branch is slave-only.
     if (htim->Instance == TRIGGER_TIMER.Instance) {
-        follower_dead_time_tick();
+        slave_dead_time_tick();
         return;
     }
 
@@ -745,7 +745,7 @@ void auto_cycle_reset_pulse_counter(void)
 	_auto_cycle.pulse_counter_in_profile = 0;
 }
 
-// Trigger follower (slave modules).
+// Trigger slave (slave modules).
 //
 // Only the master generates a trigger; slaves park TRIGGER_Pin high-Z at
 // startup and their TX7332s fire from the master's edge on the shared trigger
@@ -762,7 +762,7 @@ void auto_cycle_reset_pulse_counter(void)
 // ARR sits at two trigger periods, so an update event means the edges stopped
 // (train boundary or STOP_SWTRIG); the counter is then held off until the next
 // edge restarts it, which is why plain reset mode will not do.
-static void follower_park_trigger_pin(void)
+static void slave_park_trigger_pin(void)
 {
 	GPIO_InitTypeDef gpio = {0};
 
@@ -773,7 +773,7 @@ static void follower_park_trigger_pin(void)
 	HAL_GPIO_Init(TRIGGER_GPIO_Port, &gpio);
 }
 
-bool trigger_follower_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
+bool trigger_slave_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
                           uint32_t train_count, uint32_t period_us, uint8_t flags)
 {
 	TIM_IC_InitTypeDef ic = {0};
@@ -784,7 +784,7 @@ bool trigger_follower_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
 	if (get_device_role() == ROLE_MASTER) return false;
 	if (pulses_per_profile == 0U || period_us <= MIN_PROFILE_SWITCH_US) return false;
 
-	trigger_follower_disarm();
+	trigger_slave_disarm();
 
 	// Stretch the tick until two trigger periods fit in TIM15's 16-bit ARR
 	// (1 us ticks cover periods up to ~32 ms, i.e. down to ~30 Hz).
@@ -825,21 +825,21 @@ bool trigger_follower_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
 	if (HAL_TIM_SlaveConfigSynchro(&TRIGGER_TIMER, &slave) != HAL_OK) goto fail;
 
 	// MX_TIM15_Init leaves one-pulse mode set for the master's trigger output;
-	// a follower has to keep counting between edges.
+	// a slave has to keep counting between edges.
 	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_OPM;
 	// Raise the update interrupt on overflow only - the slave-mode reset on
 	// every trigger edge would otherwise look like a missing edge.
 	__HAL_TIM_URS_ENABLE(&TRIGGER_TIMER);
 
-	_follower.armed = true;
-	_follower.cycling = true;
-	_follower.flags = flags;
-	_follower.pulses_per_profile = pulses_per_profile;
-	_follower.pulse_count = pulse_count;
-	_follower.train_count = train_count;
-	_follower.pulse_in_train = 0;
-	_follower.trains_done = 0;
-	_follower.pulse_in_profile = 0;
+	_slave.armed = true;
+	_slave.cycling = true;
+	_slave.flags = flags;
+	_slave.pulses_per_profile = pulses_per_profile;
+	_slave.pulse_count = pulse_count;
+	_slave.train_count = train_count;
+	_slave.pulse_in_train = 0;
+	_slave.trains_done = 0;
+	_slave.pulse_in_profile = 0;
 
 	__HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
 	__HAL_TIM_SET_COMPARE(&TRIGGER_TIMER, TIM_CHANNEL_1, compare);
@@ -853,67 +853,67 @@ bool trigger_follower_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
 	return true;
 
 fail:
-	trigger_follower_disarm();
+	trigger_slave_disarm();
 	return false;
 }
 
-void trigger_follower_disarm(void)
+void trigger_slave_disarm(void)
 {
 	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_CC1 | TIM_IT_UPDATE);
 	HAL_TIM_Base_Stop_IT(&TRIGGER_TIMER);
 	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_CEN;
 	__HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_CC1 | TIM_FLAG_UPDATE);
 
-	_follower.armed = false;
-	_follower.cycling = false;
-	_follower.pulse_in_train = 0;
-	_follower.trains_done = 0;
-	_follower.pulse_in_profile = 0;
+	_slave.armed = false;
+	_slave.cycling = false;
+	_slave.pulse_in_train = 0;
+	_slave.trains_done = 0;
+	_slave.pulse_in_profile = 0;
 
-	follower_park_trigger_pin();
+	slave_park_trigger_pin();
 }
 
-bool trigger_follower_is_armed(void)
+bool trigger_slave_is_armed(void)
 {
-	return _follower.armed;
+	return _slave.armed;
 }
 
 // CC1: MIN_PROFILE_SWITCH_US before the next expected trigger edge, i.e. the
 // burst from the current pulse has finished sounding. Mirrors the pulse
 // accounting in TRIG_TIM1_IRQHandler so both roles land on the same profile.
-static void follower_dead_time_tick(void)
+static void slave_dead_time_tick(void)
 {
-	if (!_follower.armed || !_follower.cycling) return;
+	if (!_slave.armed || !_slave.cycling) return;
 
-	_follower.pulse_in_train++;
+	_slave.pulse_in_train++;
 
-	if (_follower.pulse_count != 0U && _follower.pulse_in_train >= _follower.pulse_count) {
-		_follower.pulse_in_train = 0;
-		_follower.pulse_in_profile = 0;
-		if ((_follower.flags & CYCLE_ARM_FLAG_STOP_AFTER_TRAIN) != 0U) {
+	if (_slave.pulse_count != 0U && _slave.pulse_in_train >= _slave.pulse_count) {
+		_slave.pulse_in_train = 0;
+		_slave.pulse_in_profile = 0;
+		if ((_slave.flags & CYCLE_ARM_FLAG_STOP_AFTER_TRAIN) != 0U) {
 			// Free-running continuous mode: the master stops switching after
 			// TriggerPulseCount pulses, so stop here too rather than drift.
-			_follower.cycling = false;
+			_slave.cycling = false;
 			return;
 		}
-		_follower.trains_done++;
-		if (_follower.train_count != 0U && _follower.trains_done >= _follower.train_count) {
+		_slave.trains_done++;
+		if (_slave.train_count != 0U && _slave.trains_done >= _slave.train_count) {
 			// Sequence over. The master's stop cancels its pending action and
 			// leaves the last profile selected, so hold ours there too instead
 			// of resetting - otherwise modules disagree once the array is idle.
-			_follower.cycling = false;
+			_slave.cycling = false;
 			return;
 		}
 		reset_profile_cycle_to_start();
 		return;
 	}
 
-	_follower.pulse_in_profile++;
-	if (_follower.pulse_in_profile >= _follower.pulses_per_profile) {
-		_follower.pulse_in_profile = 0;
+	_slave.pulse_in_profile++;
+	if (_slave.pulse_in_profile >= _slave.pulses_per_profile) {
+		_slave.pulse_in_profile = 0;
 		if (!apply_next_profile_in_cycle()) {
 			// No usable execution order; stop rather than switch at random.
-			_follower.cycling = false;
+			_slave.cycling = false;
 		}
 	}
 }
@@ -923,9 +923,9 @@ static void follower_dead_time_tick(void)
 // begin the execution order again, matching the master's PROFILE_ACTION_RESET.
 void TRIG_TIM15_IRQHandler(void)
 {
-	// Masters never arm the follower, so the update event is theirs: the
-	// one-shot handler's unconditional IT disable would deafen a follower.
-	if (!_follower.armed) {
+	// Masters never arm the slave, so the update event is theirs: the
+	// one-shot handler's unconditional IT disable would deafen a slave.
+	if (!_slave.armed) {
 		TRIG_ONESHOT_IRQHandler();
 		return;
 	}
@@ -934,9 +934,9 @@ void TRIG_TIM15_IRQHandler(void)
 	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_CEN;
 	__HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
 
-	_follower.pulse_in_train = 0;
-	_follower.pulse_in_profile = 0;
-	if (_follower.cycling) {
+	_slave.pulse_in_train = 0;
+	_slave.pulse_in_profile = 0;
+	if (_slave.cycling) {
 		reset_profile_cycle_to_start();
 	}
 }
