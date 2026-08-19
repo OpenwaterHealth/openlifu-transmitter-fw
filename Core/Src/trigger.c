@@ -496,8 +496,8 @@ uint8_t start_trigger_pulse(void) {
     if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY) return _timerDataConfig.TriggerStatus;
 
 
-    // Compute period from frequency (in microseconds)
-    uint32_t triggerPeriodUsec = 1000000 / _timerDataConfig.TriggerFrequencyHz;
+    // Period from frequency; 0 Hz yields 0 and fails the pulse-width check below.
+    uint32_t triggerPeriodUsec = get_trigger_period_us();
 
     // Validate: Pulse width must be less than the period
     if (_timerDataConfig.TriggerPulseWidthUsec >= triggerPeriodUsec) {
@@ -703,6 +703,22 @@ void TRIG_TIM1_IRQHandler(void) {
     	}
     }
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
+}
+
+// How long each profile is held: the pulse train split evenly across the
+// execution order. A train that will not divide is rejected rather than
+// truncated, which would strand modules on different profiles mid-sequence.
+// Master and slave both run this, each over its own order.
+bool trigger_pulses_per_profile(uint8_t n_profiles, uint32_t *pulses_per_profile)
+{
+	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
+
+	if (n_profiles == 0U || pulse_count == 0U || (pulse_count % n_profiles) != 0U) {
+		return false;
+	}
+
+	*pulses_per_profile = pulse_count / n_profiles;
+	return true;
 }
 
 void auto_cycle_start(uint32_t pulses_per_profile)

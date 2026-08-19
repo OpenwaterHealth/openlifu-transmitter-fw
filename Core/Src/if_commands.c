@@ -506,21 +506,6 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 	}
 }
 
-// Pulses each profile is held for: the train split evenly across this module's
-// execution order. Every module runs the same formula over its own order.
-static bool compute_pulses_per_profile(uint32_t *pulses_per_profile)
-{
-	uint32_t pulse_count = get_trigger_pulse_count();
-	uint8_t n_profiles = profile_cycle.exec_order_len;
-
-	if (n_profiles == 0 || pulse_count == 0 || (pulse_count % n_profiles) != 0) {
-		return false;
-	}
-
-	*pulses_per_profile = pulse_count / n_profiles;
-	return true;
-}
-
 // Push the trigger config to every slave. One trigger net means one config, and
 // a slave needs it to derive its own rastering timing at arm time. Slaves store
 // it only - START/STOP_SWTRIG stay master-only, so none of them ever drives it.
@@ -681,7 +666,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
 				// Validate: pulse_count must be divisible by number of profiles
 				uint32_t pulses_per_profile = 0;
-				if (!compute_pulses_per_profile(&pulses_per_profile)) {
+				if (!trigger_pulses_per_profile(profile_cycle.exec_order_len, &pulses_per_profile)) {
 					uartResp->packet_type = OW_ERROR;
 					break;
 				}
@@ -1192,7 +1177,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Same formula the master runs, over the trigger config it fanned
 			// out to us and our own execution order.
 			uint32_t pulses_per_profile = 0;
-			if (!compute_pulses_per_profile(&pulses_per_profile) ||
+			if (!trigger_pulses_per_profile(profile_cycle.exec_order_len, &pulses_per_profile) ||
 				!trigger_slave_arm(pulses_per_profile)) {
 				uartResp->packet_type = OW_ERROR;
 				return;

@@ -79,6 +79,7 @@ void TRIG_ONESHOT_IRQHandler(void);
 void print_OW_TimerData(const OW_TimerData *data);
 
 // Auto-cycle API: pulse-level profile switching driven from the trigger ISRs.
+bool trigger_pulses_per_profile(uint8_t n_profiles, uint32_t *pulses_per_profile);
 void auto_cycle_start(uint32_t pulses_per_profile);
 void auto_cycle_stop(void);
 bool auto_cycle_is_active(void);
