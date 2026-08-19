@@ -157,10 +157,8 @@ void i2c_print_info() {
     printf("I2C Slave Addr: 0x%02x\r\n\r\n", (uint8_t)(GLOBAL_I2C_DEVICE->Init.OwnAddress1 >> 1));
 }
 
-// Command opcode -> packet type. The 0x20 / 0x00 nibbles map straight onto
-// TX7332 / global commands, but the controller commands the master forwards to
-// us do not live in one nibble (0x1D-0x1F alongside 0x28-0x2A), so they are
-// listed explicitly. Anything unrecognised is rejected rather than guessed.
+// Command opcode -> packet type. Forwarded controller commands don't fit the
+// 0x2X / 0x0X range checks below, so they are matched explicitly first.
 static uint8_t slave_packet_type_for(uint8_t command)
 {
 	switch (command) {

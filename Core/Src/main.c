@@ -1754,7 +1754,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
   if (htim->Instance == TRIGGER_TIMER.Instance)
   {
-    // Means either a quiet trigger line or a pulse-complete, by role (trigger.c).
+    // Means either a quiet trigger line or a pulse-complete depending if master or slave.
     TRIG_TIM15_IRQHandler();
   }
 

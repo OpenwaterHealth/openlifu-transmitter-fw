@@ -118,14 +118,8 @@ typedef enum {
 	OW_CTRL_SET_PROFILE_CYCLE = 0x1F,
 	OW_CTRL_SET_PATTERN_PROFILE = 0x28,  // 0x28 and 0x29 skip the UstxTX7332Commands block since we're out of hex values
 	OW_CTRL_GET_PATTERN_PROFILE = 0x29,
-	OW_CTRL_ARM_PROFILE_CYCLE = 0x2A,    // master -> slave only: cycle profiles off the shared trigger line
+	OW_CTRL_ARM_PROFILE_CYCLE = 0x2A,    // master -> slave(s) only, cycle profiles off the shared trigger line
 } UstxControllerCommands;
-
-// OW_CTRL_ARM_PROFILE_CYCLE carries no payload: reserved = 1 arms, 0 disarms.
-// The master sends it to every slave at START_SWTRIG so each module advances its
-// own execution order in lockstep instead of waiting on per-pulse I2C. Timing
-// comes from the trigger config, which every module already holds because
-// OW_CTRL_SET_SWTRIG is fanned out to the slaves.
 
 typedef enum {
 	OW_TX7332_STATUS = 0x20,

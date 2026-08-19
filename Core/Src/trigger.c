@@ -465,9 +465,7 @@ static void cancel_profile_action(void)
 // cppcheck-suppress constParameterPointer
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    // On a slave the same dead-time window is timed off the trigger line by
-    // TRIGGER_TIMER instead of by our own period timer. The master never enables
-    // a compare interrupt on TRIGGER_TIMER, so this branch is slave-only.
+	// Slave-only: dead-time timed off trigger line (master uses period timer)
     if (htim->Instance == TRIGGER_TIMER.Instance) {
         slave_dead_time_tick();
         return;
@@ -705,10 +703,7 @@ void TRIG_TIM1_IRQHandler(void) {
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
 }
 
-// How long each profile is held: the pulse train split evenly across the
-// execution order. A train that will not divide is rejected rather than
-// truncated, which would strand modules on different profiles mid-sequence.
-// Master and slave both run this, each over its own order.
+// Split pulse count per number of profiles
 bool trigger_pulses_per_profile(uint8_t n_profiles, uint32_t *pulses_per_profile)
 {
 	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
@@ -751,23 +746,10 @@ void auto_cycle_reset_pulse_counter(void)
 	_auto_cycle.pulse_counter_in_profile = 0;
 }
 
-// Trigger slave (slave modules).
-//
-// Only the master generates a trigger; slaves park TRIGGER_Pin high-Z at
-// startup and their TX7332s fire from the master's edge on the shared trigger
-// net. Rastering therefore cannot be driven by per-pulse I2C - the switch has
-// to land inside MIN_PROFILE_SWITCH_US of dead time, which no bus round trip
-// can promise. Instead every module holds the same execution order (forwarded
-// at config time) and advances it locally off the shared edge.
-//
-// TRIGGER_TIMER is idle on a slave, so it is reconfigured as: TI2FP2 (the
-// trigger pin) in combined reset+trigger slave mode, which restarts the counter
-// on every trigger edge with no software in the path, and CC1 placed
-// MIN_PROFILE_SWITCH_US before the next expected edge to do the SPI writes -
-// the same dead-time window the master uses via schedule_profile_action().
-// ARR sits at two trigger periods, so an update event means the edges stopped
-// (train boundary or STOP_SWTRIG); the counter is then held off until the next
-// edge restarts it, which is why plain reset mode will not do.
+// Slaves advance their own execution order off the master's shared trigger edge.
+// TRIGGER_TIMER (idle on slaves) watches the trigger pin - each edge resets the
+// counter, CC1 fires MIN_PROFILE_SWITCH_US before the next edge to switch, and
+// an ARR update (two silent periods) means the trigger stopped.
 static void slave_park_trigger_pin(void)
 {
 	GPIO_InitTypeDef gpio = {0};
@@ -785,27 +767,22 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 	TIM_SlaveConfigTypeDef slave = {0};
 	GPIO_InitTypeDef gpio = {0};
 
-	// Every module runs the same trigger config, so derive the master's pulse
-	// accounting from our own copy rather than having it shipped over I2C.
+	// Every module runs the same trigger config.
 	uint32_t period_us = get_trigger_period_us();
 	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
 	uint32_t train_count;
 	bool stop_after_train = false;
 
-	// The master drives this pin; letting it follow itself would fight the net.
 	if (get_device_role() == ROLE_MASTER) return false;
 	if (pulses_per_profile == 0U || period_us <= MIN_PROFILE_SWITCH_US) return false;
 
-	// Where the sequence ends, so we hold the last profile exactly like the
-	// master does instead of resetting. Continuous mode never ends, hence 0.
 	switch (_timerDataConfig.TriggerMode) {
 	case TRIGGER_MODE_SINGLE:
 		train_count = 1;
 		break;
 	case TRIGGER_MODE_CONTINUOUS:
 		train_count = 0;
-		// Free-running continuous closes no train, and the master stops
-		// switching after TriggerPulseCount pulses; stop on that pulse too.
+		// master stops switching after TriggerPulseCount pulses, so stop there too
 		stop_after_train = (_timerDataConfig.TriggerPulseTrainInterval == 0);
 		break;
 	default:
@@ -816,7 +793,6 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 	trigger_slave_disarm();
 
 	// Stretch the tick until two trigger periods fit in TIM15's 16-bit ARR
-	// (1 us ticks cover periods up to ~32 ms, i.e. down to ~30 Hz).
 	uint32_t tick_us = 1U;
 	while (((2U * period_us) / tick_us) > 0xFFFFU) tick_us++;
 
@@ -853,11 +829,9 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 	slave.TriggerFilter = 4;
 	if (HAL_TIM_SlaveConfigSynchro(&TRIGGER_TIMER, &slave) != HAL_OK) goto fail;
 
-	// MX_TIM15_Init leaves one-pulse mode set for the master's trigger output;
-	// a slave has to keep counting between edges.
+	// Clear the one-pulse mode left by MX_TIM15_Init; a slave keeps counting between edges.
 	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_OPM;
-	// Raise the update interrupt on overflow only - the slave-mode reset on
-	// every trigger edge would otherwise look like a missing edge.
+	// Update interrupt on overflow only, not on the per-edge slave-mode reset.
 	__HAL_TIM_URS_ENABLE(&TRIGGER_TIMER);
 
 	_slave.armed = true;
@@ -874,9 +848,8 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 	__HAL_TIM_SET_COMPARE(&TRIGGER_TIMER, TIM_CHANNEL_1, compare);
 	__HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_CC1 | TIM_FLAG_UPDATE);
 	__HAL_TIM_ENABLE_IT(&TRIGGER_TIMER, TIM_IT_CC1);
-	// Enables the update interrupt but leaves the counter stopped: in combined
-	// reset+trigger mode the first trigger edge starts it. Nothing ticks (and
-	// no profile advances) in the gap between arming and the master starting.
+	// Counter stays stopped until the first trigger edge starts it, so nothing
+	// ticks between arming and the master starting.
 	if (HAL_TIM_Base_Start_IT(&TRIGGER_TIMER) != HAL_OK) goto fail;
 
 	return true;
@@ -888,8 +861,6 @@ fail:
 
 void trigger_slave_disarm(void)
 {
-	// TRIGGER_TIMER is the master's trigger generator; stopping it and parking
-	// the pin as an input here would kill the trigger net.
 	if (get_device_role() == ROLE_MASTER) return;
 
 	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_CC1 | TIM_IT_UPDATE);
@@ -911,9 +882,8 @@ bool trigger_slave_is_armed(void)
 	return _slave.armed;
 }
 
-// CC1: MIN_PROFILE_SWITCH_US before the next expected trigger edge, i.e. the
-// burst from the current pulse has finished sounding. Mirrors the pulse
-// accounting in TRIG_TIM1_IRQHandler so both roles land on the same profile.
+// CC1: just before the next trigger edge, after the current burst ends.
+// Mirrors the pulse accounting in TRIG_TIM1_IRQHandler.
 static void slave_dead_time_tick(void)
 {
 	if (!_slave.armed || !_slave.cycling) return;
@@ -924,16 +894,11 @@ static void slave_dead_time_tick(void)
 		_slave.pulse_in_train = 0;
 		_slave.pulse_in_profile = 0;
 		if (_slave.stop_after_train) {
-			// Free-running continuous mode: the master stops switching after
-			// TriggerPulseCount pulses, so stop here too rather than drift.
 			_slave.cycling = false;
 			return;
 		}
 		_slave.trains_done++;
 		if (_slave.train_count != 0U && _slave.trains_done >= _slave.train_count) {
-			// Sequence over. The master's stop cancels its pending action and
-			// leaves the last profile selected, so hold ours there too instead
-			// of resetting - otherwise modules disagree once the array is idle.
 			_slave.cycling = false;
 			return;
 		}
@@ -945,19 +910,16 @@ static void slave_dead_time_tick(void)
 	if (_slave.pulse_in_profile >= _slave.pulses_per_profile) {
 		_slave.pulse_in_profile = 0;
 		if (!apply_next_profile_in_cycle()) {
-			// No usable execution order; stop rather than switch at random.
 			_slave.cycling = false;
 		}
 	}
 }
 
-// TRIGGER_TIMER update: two trigger periods with no edge, so the train ended or
-// the master stopped. Hold the counter off until the next edge restarts it and
-// begin the execution order again, matching the master's PROFILE_ACTION_RESET.
+// Update: two trigger periods with no edge, so the train ended or the master
+// stopped. Restart the execution order and wait for the next edge.
 void TRIG_TIM15_IRQHandler(void)
 {
-	// Masters never arm the slave, so the update event is theirs: the
-	// one-shot handler's unconditional IT disable would deafen a slave.
+	// Not armed means this is the master's one-shot update, not ours.
 	if (!_slave.armed) {
 		TRIG_ONESHOT_IRQHandler();
 		return;

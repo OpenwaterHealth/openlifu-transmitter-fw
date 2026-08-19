@@ -506,40 +506,31 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 	}
 }
 
-// Push the trigger config to every slave. One trigger net means one config, and
-// a slave needs it to derive its own rastering timing at arm time. Slaves store
-// it only - START/STOP_SWTRIG stay master-only, so none of them ever drives it.
+// Push trigger config to every slave.
 static bool set_slave_trigger_data(const UartPacket *cmd)
 {
 	UartPacket fwd_resp;
-	bool ok = true;
 
 	for (uint8_t m = 1; m < get_module_count(); m++) {
 		memset(&fwd_resp, 0, sizeof(fwd_resp));
 
 		process_i2c_forward(&fwd_resp, cmd, m);
 		if (fwd_resp.packet_type == OW_ERROR) {
-			printf("[SWTRIG] module %u rejected the trigger config\r\n", m);
-			ok = false;
+			//printf("[SWTRIG] module %u rejected the trigger config\r\n", m);
+			return false;
 		}
 	}
 
-	return ok;
+	return true;
 }
 
 // Arm (or disarm) pulse-level profile cycling on every slave module.
-//
 // Only the master generates a trigger, but the trigger net is shared, so each
-// module can advance its own execution order off the same edge. That has to be
-// set up here, at START_SWTRIG: a forwarded I2C round trip costs ~50 ms and
-// could never land inside the MIN_PROFILE_SWITCH_US dead time between pulses.
-// Carries no timing - the slaves already hold the trigger config and derive
-// their own. Returns false if any module refused to arm.
+// module can advance its own execution order off the same edge.
 static bool set_slave_profile_cycles(bool arm)
 {
 	UartPacket fwd;
 	UartPacket fwd_resp;
-	bool ok = true;
 
 	for (uint8_t m = 1; m < get_module_count(); m++) {
 		memset(&fwd, 0, sizeof(fwd));
@@ -552,12 +543,12 @@ static bool set_slave_profile_cycles(bool arm)
 
 		process_i2c_forward(&fwd_resp, &fwd, m);
 		if (fwd_resp.packet_type == OW_ERROR) {
-			printf("[AUTO_CYCLE] module %u refused to %s\r\n", m, arm ? "arm" : "disarm");
-			ok = false;
+			//printf("[AUTO_CYCLE] module %u refused to %s\r\n", m, arm ? "arm" : "disarm");
+			return false;
 		}
 	}
 
-	return ok;
+	return true;
 }
 
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
@@ -678,9 +669,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 					break;
 				}
 
-				// Slaves never see this command, and they cannot be told
-				// per-pulse over I2C either; arm them to follow the shared
-				// trigger line before the first edge goes out.
+				// Arm the slaves before the first trigger edge goes out.
 				if (!set_slave_profile_cycles(true)) {
 					(void)set_slave_profile_cycles(false);
 					uartResp->packet_type = OW_ERROR;
@@ -743,9 +732,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				{
 					uartResp->packet_type = OW_ERROR;
 				}else{
-					// One trigger net, so every module runs off the same config:
-					// a slave derives its own rastering timing from it and never
-					// starts a trigger of its own (START/STOP stay master-only).
 					if (get_device_role() == ROLE_MASTER && !set_slave_trigger_data(cmd)) {
 						uartResp->packet_type = OW_ERROR;
 					}
@@ -953,8 +939,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 					return;
 				}
 
-				// addr selects the module, so apply to both of its chips - same
-				// scope as SET_DELAY_PROFILE and as the auto-cycle switch.
 				for (uint8_t i = 0; i < TX_PER_MODULE; i++) {
 					// Pattern profile selector is 0-based in the TX7332 registers.
 					TX7332_WriteReg(&transmitters[i], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
@@ -982,7 +966,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			if (module_id == 0x00) {
-				// Both chips of a module track the same selector (see the setter).
 				uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[0], PATTERN_PROFILE_SELECT_REG_G1);
 				uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[0], PATTERN_PROFILE_SELECT_REG_G2);
 
@@ -1076,15 +1059,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-			// Gating: Prevent cycle config changes while auto-cycle is running
+			// Prevent cycle config changes while auto-cycle is running
 			if (auto_cycle_is_active()) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			// Every module keeps its own copy of the execution order and its own
-			// two chips' apodization, so the host configures each module in turn
-			// (addr = module index, n_chips <= TX_PER_MODULE).
+			// Every module keeps its own copy of the execution order and apodizations,
+			// so the host configures each slave.
 			if (module_id == 0x00) {
 				if (cmd->data_len < PROFILE_CYCLE_HEADER_LEN) {
 					uartResp->packet_type = OW_ERROR;
@@ -1148,17 +1130,13 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		}
 		case OW_CTRL_ARM_PROFILE_CYCLE:
 		{
-			// Master -> slave only: reaches us as a forwarded I2C packet, which
-			// the slave sees as addr 0. Arms the trigger slave so this module
-			// advances the execution order the master just sent us, off the
-			// shared trigger line rather than off per-pulse commands.
+			// Master -> slave only. Arm this module to advance its
+			// execution order off the shared trigger line.
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-			// Never on the master: it drives the trigger net, and disarming
-			// would hand its own trigger pin back to the slave as an input.
 			if (module_id != 0 || get_device_role() == ROLE_MASTER) {
 				uartResp->packet_type = OW_ERROR;
 				return;

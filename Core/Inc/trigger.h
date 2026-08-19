@@ -86,10 +86,8 @@ bool auto_cycle_is_active(void);
 AutoCycleState_e auto_cycle_get_state(void);
 void auto_cycle_reset_pulse_counter(void);
 
-// Slave-side mirror of the auto-cycle above. Slaves never generate a trigger,
-// they watch the master's shared trigger line and switch their own chips in the
-// same dead-time window. Armed over I2C at START_SWTRIG; every other timing
-// input comes from this module's own copy of the trigger config.
+// Slave-side mirror of the auto-cycle above. Armed over I2C at START_SWTRIG,
+// every other timing input comes from this module's own copy of the trigger config.
 bool trigger_slave_arm(uint32_t pulses_per_profile);
 void trigger_slave_disarm(void);
 bool trigger_slave_is_armed(void);
