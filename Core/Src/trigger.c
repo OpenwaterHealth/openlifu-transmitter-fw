@@ -39,7 +39,7 @@ static AutoCycleContext_t _auto_cycle = {
 typedef struct {
 	bool armed;                    // TIM15 is watching the shared trigger line
 	bool cycling;                  // still advancing the execution order
-	uint8_t flags;
+	bool stop_after_train;         // free-running continuous: stop with the master
 	uint32_t pulses_per_profile;
 	uint32_t pulse_count;          // pulses per train, 0 = no train boundary
 	uint32_t train_count;          // trains per sequence, 0 = continuous
@@ -421,16 +421,6 @@ uint32_t get_trigger_period_us(void)
 	return 1000000UL / _timerDataConfig.TriggerFrequencyHz;
 }
 
-uint32_t get_trigger_pulse_train_interval(void)
-{
-	return _timerDataConfig.TriggerPulseTrainInterval;
-}
-
-uint32_t get_trigger_pulse_train_count(void)
-{
-	return _timerDataConfig.TriggerPulseTrainCount;
-}
-
 // Deferred profile switching.
 //
 // The trigger edge that raises the LORES_TIMER update interrupt is the same
@@ -773,16 +763,39 @@ static void slave_park_trigger_pin(void)
 	HAL_GPIO_Init(TRIGGER_GPIO_Port, &gpio);
 }
 
-bool trigger_slave_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
-                          uint32_t train_count, uint32_t period_us, uint8_t flags)
+bool trigger_slave_arm(uint32_t pulses_per_profile)
 {
 	TIM_IC_InitTypeDef ic = {0};
 	TIM_SlaveConfigTypeDef slave = {0};
 	GPIO_InitTypeDef gpio = {0};
 
+	// Every module runs the same trigger config, so derive the master's pulse
+	// accounting from our own copy rather than having it shipped over I2C.
+	uint32_t period_us = get_trigger_period_us();
+	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
+	uint32_t train_count;
+	bool stop_after_train = false;
+
 	// The master drives this pin; letting it follow itself would fight the net.
 	if (get_device_role() == ROLE_MASTER) return false;
 	if (pulses_per_profile == 0U || period_us <= MIN_PROFILE_SWITCH_US) return false;
+
+	// Where the sequence ends, so we hold the last profile exactly like the
+	// master does instead of resetting. Continuous mode never ends, hence 0.
+	switch (_timerDataConfig.TriggerMode) {
+	case TRIGGER_MODE_SINGLE:
+		train_count = 1;
+		break;
+	case TRIGGER_MODE_CONTINUOUS:
+		train_count = 0;
+		// Free-running continuous closes no train, and the master stops
+		// switching after TriggerPulseCount pulses; stop on that pulse too.
+		stop_after_train = (_timerDataConfig.TriggerPulseTrainInterval == 0);
+		break;
+	default:
+		train_count = _timerDataConfig.TriggerPulseTrainCount;
+		break;
+	}
 
 	trigger_slave_disarm();
 
@@ -833,7 +846,7 @@ bool trigger_slave_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
 
 	_slave.armed = true;
 	_slave.cycling = true;
-	_slave.flags = flags;
+	_slave.stop_after_train = stop_after_train;
 	_slave.pulses_per_profile = pulses_per_profile;
 	_slave.pulse_count = pulse_count;
 	_slave.train_count = train_count;
@@ -859,6 +872,10 @@ fail:
 
 void trigger_slave_disarm(void)
 {
+	// TRIGGER_TIMER is the master's trigger generator; stopping it and parking
+	// the pin as an input here would kill the trigger net.
+	if (get_device_role() == ROLE_MASTER) return;
+
 	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_CC1 | TIM_IT_UPDATE);
 	HAL_TIM_Base_Stop_IT(&TRIGGER_TIMER);
 	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_CEN;
@@ -890,7 +907,7 @@ static void slave_dead_time_tick(void)
 	if (_slave.pulse_count != 0U && _slave.pulse_in_train >= _slave.pulse_count) {
 		_slave.pulse_in_train = 0;
 		_slave.pulse_in_profile = 0;
-		if ((_slave.flags & CYCLE_ARM_FLAG_STOP_AFTER_TRAIN) != 0U) {
+		if (_slave.stop_after_train) {
 			// Free-running continuous mode: the master stops switching after
 			// TriggerPulseCount pulses, so stop here too rather than drift.
 			_slave.cycling = false;

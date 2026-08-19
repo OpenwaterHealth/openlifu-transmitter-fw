@@ -66,8 +66,6 @@ void init_trigger_pulse(OW_TimerData _timerDataConfig);
 uint8_t get_trigger_status(void);
 uint32_t get_trigger_pulse_count(void);
 uint32_t get_trigger_period_us(void);
-uint32_t get_trigger_pulse_train_interval(void);
-uint32_t get_trigger_pulse_train_count(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
@@ -89,9 +87,9 @@ void auto_cycle_reset_pulse_counter(void);
 
 // Slave-side mirror of the auto-cycle above. Slaves never generate a trigger,
 // they watch the master's shared trigger line and switch their own chips in the
-// same dead-time window. Armed over I2C at START_SWTRIG.
-bool trigger_slave_arm(uint32_t pulses_per_profile, uint32_t pulse_count,
-                       uint32_t train_count, uint32_t period_us, uint8_t flags);
+// same dead-time window. Armed over I2C at START_SWTRIG; every other timing
+// input comes from this module's own copy of the trigger config.
+bool trigger_slave_arm(uint32_t pulses_per_profile);
 void trigger_slave_disarm(void);
 bool trigger_slave_is_armed(void);
 void TRIG_TIM15_IRQHandler(void);

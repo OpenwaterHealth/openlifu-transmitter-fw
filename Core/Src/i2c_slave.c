@@ -164,6 +164,7 @@ void i2c_print_info() {
 static uint8_t slave_packet_type_for(uint8_t command)
 {
 	switch (command) {
+	case OW_CTRL_SET_SWTRIG:
 	case OW_CTRL_SET_DELAY_PROFILE:
 	case OW_CTRL_GET_DELAY_PROFILE:
 	case OW_CTRL_SET_PROFILE_CYCLE:
