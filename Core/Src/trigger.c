@@ -1,6 +1,7 @@
 #include "trigger.h"
 #include "main.h"
 #include "if_commands.h"
+#include "module_manager.h"
 
  #include "jsmn.h"
 
@@ -33,6 +34,23 @@ static AutoCycleContext_t _auto_cycle = {
 	.pulses_per_profile = 0,
 	.pulse_counter_in_profile = 0,
 };
+
+// Trigger-slave state (slave modules only, see the block near the bottom).
+typedef struct {
+	bool armed;                    // TIM15 is watching the shared trigger line
+	bool cycling;                  // still advancing the execution order
+	bool stop_after_train;         // free-running continuous: stop with the master
+	uint32_t pulses_per_profile;
+	uint32_t pulse_count;          // pulses per train, 0 = no train boundary
+	uint32_t train_count;          // trains per sequence, 0 = continuous
+	uint32_t pulse_in_train;
+	uint32_t trains_done;
+	uint32_t pulse_in_profile;
+} TriggerSlave_t;
+
+static volatile TriggerSlave_t _slave = {0};
+
+static void slave_dead_time_tick(void);
 
 
 static int jsoneq(const char *json, const jsmntok_t *tok, const char *s) {
@@ -397,6 +415,12 @@ uint32_t get_trigger_pulse_count(void)
 	return _timerDataConfig.TriggerPulseCount;
 }
 
+uint32_t get_trigger_period_us(void)
+{
+	if (_timerDataConfig.TriggerFrequencyHz == 0) return 0;
+	return 1000000UL / _timerDataConfig.TriggerFrequencyHz;
+}
+
 // Deferred profile switching.
 //
 // The trigger edge that raises the LORES_TIMER update interrupt is the same
@@ -441,6 +465,12 @@ static void cancel_profile_action(void)
 // cppcheck-suppress constParameterPointer
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
+	// Slave-only: dead-time timed off trigger line (master uses period timer)
+    if (htim->Instance == TRIGGER_TIMER.Instance) {
+        slave_dead_time_tick();
+        return;
+    }
+
     if (htim->Instance != LORES_TIMER.Instance) return;
 
     uint8_t action = _pending_profile_action;
@@ -464,8 +494,8 @@ uint8_t start_trigger_pulse(void) {
     if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY) return _timerDataConfig.TriggerStatus;
 
 
-    // Compute period from frequency (in microseconds)
-    uint32_t triggerPeriodUsec = 1000000 / _timerDataConfig.TriggerFrequencyHz;
+    // Period from frequency; 0 Hz yields 0 and fails the pulse-width check below.
+    uint32_t triggerPeriodUsec = get_trigger_period_us();
 
     // Validate: Pulse width must be less than the period
     if (_timerDataConfig.TriggerPulseWidthUsec >= triggerPeriodUsec) {
@@ -673,6 +703,19 @@ void TRIG_TIM1_IRQHandler(void) {
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
 }
 
+// Split pulse count per number of profiles
+bool trigger_pulses_per_profile(uint8_t n_profiles, uint32_t *pulses_per_profile)
+{
+	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
+
+	if (n_profiles == 0U || pulse_count == 0U || (pulse_count % n_profiles) != 0U) {
+		return false;
+	}
+
+	*pulses_per_profile = pulse_count / n_profiles;
+	return true;
+}
+
 void auto_cycle_start(uint32_t pulses_per_profile)
 {
 	_auto_cycle.state = AUTO_CYCLE_RUNNING;
@@ -701,4 +744,194 @@ AutoCycleState_e auto_cycle_get_state(void)
 void auto_cycle_reset_pulse_counter(void)
 {
 	_auto_cycle.pulse_counter_in_profile = 0;
+}
+
+// Slaves advance their own execution order off the master's shared trigger edge.
+// TRIGGER_TIMER (idle on slaves) watches the trigger pin - each edge resets the
+// counter, CC1 fires MIN_PROFILE_SWITCH_US before the next edge to switch, and
+// an ARR update (two silent periods) means the trigger stopped.
+static void slave_park_trigger_pin(void)
+{
+	GPIO_InitTypeDef gpio = {0};
+
+	HAL_GPIO_DeInit(TRIGGER_GPIO_Port, TRIGGER_Pin);
+	gpio.Pin = TRIGGER_Pin;
+	gpio.Mode = GPIO_MODE_INPUT;
+	gpio.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(TRIGGER_GPIO_Port, &gpio);
+}
+
+bool trigger_slave_arm(uint32_t pulses_per_profile)
+{
+	TIM_IC_InitTypeDef ic = {0};
+	TIM_SlaveConfigTypeDef slave = {0};
+	GPIO_InitTypeDef gpio = {0};
+
+	// Every module runs the same trigger config.
+	uint32_t period_us = get_trigger_period_us();
+	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
+	uint32_t train_count;
+	bool stop_after_train = false;
+
+	if (get_device_role() == ROLE_MASTER) return false;
+	if (pulses_per_profile == 0U || period_us <= MIN_PROFILE_SWITCH_US) return false;
+
+	switch (_timerDataConfig.TriggerMode) {
+	case TRIGGER_MODE_SINGLE:
+		train_count = 1;
+		break;
+	case TRIGGER_MODE_CONTINUOUS:
+		train_count = 0;
+		// master stops switching after TriggerPulseCount pulses, so stop there too
+		stop_after_train = (_timerDataConfig.TriggerPulseTrainInterval == 0);
+		break;
+	default:
+		train_count = _timerDataConfig.TriggerPulseTrainCount;
+		break;
+	}
+
+	trigger_slave_disarm();
+
+	// Stretch the tick until two trigger periods fit in TIM15's 16-bit ARR
+	uint32_t tick_us = 1U;
+	while (((2U * period_us) / tick_us) > 0xFFFFU) tick_us++;
+
+	uint32_t compare = (period_us - MIN_PROFILE_SWITCH_US) / tick_us;
+	if (compare == 0U) compare = 1U;
+
+	// TRIGGER_Pin is a high-Z input on slaves until now; hand it to TIM15.
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+	gpio.Pin = TRIGGER_Pin;
+	gpio.Mode = GPIO_MODE_AF_PP;
+	gpio.Pull = GPIO_NOPULL;
+	gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+	gpio.Alternate = GPIO_AF14_TIM15;
+	HAL_GPIO_Init(TRIGGER_GPIO_Port, &gpio);
+
+	__HAL_TIM_DISABLE(&TRIGGER_TIMER);
+	TRIGGER_TIMER.Init.Prescaler = (48U * tick_us) - 1U;
+	TRIGGER_TIMER.Init.CounterMode = TIM_COUNTERMODE_UP;
+	TRIGGER_TIMER.Init.Period = (2U * period_us) / tick_us;
+	TRIGGER_TIMER.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	TRIGGER_TIMER.Init.RepetitionCounter = 0;
+	TRIGGER_TIMER.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+	if (HAL_TIM_IC_Init(&TRIGGER_TIMER) != HAL_OK) goto fail;
+
+	ic.ICPolarity = TIM_ICPOLARITY_RISING;
+	ic.ICSelection = TIM_ICSELECTION_DIRECTTI;
+	ic.ICPrescaler = TIM_ICPSC_DIV1;
+	ic.ICFilter = 4;  // shared net between boards; filter ringing on the edge
+	if (HAL_TIM_IC_ConfigChannel(&TRIGGER_TIMER, &ic, TIM_CHANNEL_2) != HAL_OK) goto fail;
+
+	slave.SlaveMode = TIM_SLAVEMODE_COMBINED_RESETTRIGGER;
+	slave.InputTrigger = TIM_TS_TI2FP2;
+	slave.TriggerPolarity = TIM_TRIGGERPOLARITY_RISING;
+	slave.TriggerFilter = 4;
+	if (HAL_TIM_SlaveConfigSynchro(&TRIGGER_TIMER, &slave) != HAL_OK) goto fail;
+
+	// Clear the one-pulse mode left by MX_TIM15_Init; a slave keeps counting between edges.
+	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_OPM;
+	// Update interrupt on overflow only, not on the per-edge slave-mode reset.
+	__HAL_TIM_URS_ENABLE(&TRIGGER_TIMER);
+
+	_slave.armed = true;
+	_slave.cycling = true;
+	_slave.stop_after_train = stop_after_train;
+	_slave.pulses_per_profile = pulses_per_profile;
+	_slave.pulse_count = pulse_count;
+	_slave.train_count = train_count;
+	_slave.pulse_in_train = 0;
+	_slave.trains_done = 0;
+	_slave.pulse_in_profile = 0;
+
+	__HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
+	__HAL_TIM_SET_COMPARE(&TRIGGER_TIMER, TIM_CHANNEL_1, compare);
+	__HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_CC1 | TIM_FLAG_UPDATE);
+	__HAL_TIM_ENABLE_IT(&TRIGGER_TIMER, TIM_IT_CC1);
+	// Counter stays stopped until the first trigger edge starts it, so nothing
+	// ticks between arming and the master starting.
+	if (HAL_TIM_Base_Start_IT(&TRIGGER_TIMER) != HAL_OK) goto fail;
+
+	return true;
+
+fail:
+	trigger_slave_disarm();
+	return false;
+}
+
+void trigger_slave_disarm(void)
+{
+	if (get_device_role() == ROLE_MASTER) return;
+
+	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_CC1 | TIM_IT_UPDATE);
+	HAL_TIM_Base_Stop_IT(&TRIGGER_TIMER);
+	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_CEN;
+	__HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_CC1 | TIM_FLAG_UPDATE);
+
+	_slave.armed = false;
+	_slave.cycling = false;
+	_slave.pulse_in_train = 0;
+	_slave.trains_done = 0;
+	_slave.pulse_in_profile = 0;
+
+	slave_park_trigger_pin();
+}
+
+bool trigger_slave_is_armed(void)
+{
+	return _slave.armed;
+}
+
+// CC1: just before the next trigger edge, after the current burst ends.
+// Mirrors the pulse accounting in TRIG_TIM1_IRQHandler.
+static void slave_dead_time_tick(void)
+{
+	if (!_slave.armed || !_slave.cycling) return;
+
+	_slave.pulse_in_train++;
+
+	if (_slave.pulse_count != 0U && _slave.pulse_in_train >= _slave.pulse_count) {
+		_slave.pulse_in_train = 0;
+		_slave.pulse_in_profile = 0;
+		if (_slave.stop_after_train) {
+			_slave.cycling = false;
+			return;
+		}
+		_slave.trains_done++;
+		if (_slave.train_count != 0U && _slave.trains_done >= _slave.train_count) {
+			_slave.cycling = false;
+			return;
+		}
+		reset_profile_cycle_to_start();
+		return;
+	}
+
+	_slave.pulse_in_profile++;
+	if (_slave.pulse_in_profile >= _slave.pulses_per_profile) {
+		_slave.pulse_in_profile = 0;
+		if (!apply_next_profile_in_cycle()) {
+			_slave.cycling = false;
+		}
+	}
+}
+
+// Update: two trigger periods with no edge, so the train ended or the master
+// stopped. Restart the execution order and wait for the next edge.
+void TRIG_TIM15_IRQHandler(void)
+{
+	// Not armed means this is the master's one-shot update, not ours.
+	if (!_slave.armed) {
+		TRIG_ONESHOT_IRQHandler();
+		return;
+	}
+
+	// Direct CEN clear: __HAL_TIM_DISABLE is a no-op while any CCxE bit is set.
+	TRIGGER_TIMER.Instance->CR1 &= ~TIM_CR1_CEN;
+	__HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
+
+	_slave.pulse_in_train = 0;
+	_slave.pulse_in_profile = 0;
+	if (_slave.cycling) {
+		reset_profile_cycle_to_start();
+	}
 }

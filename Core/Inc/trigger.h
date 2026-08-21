@@ -65,6 +65,7 @@ void deinit_trigger(void);
 void init_trigger_pulse(OW_TimerData _timerDataConfig);
 uint8_t get_trigger_status(void);
 uint32_t get_trigger_pulse_count(void);
+uint32_t get_trigger_period_us(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
@@ -78,11 +79,19 @@ void TRIG_ONESHOT_IRQHandler(void);
 void print_OW_TimerData(const OW_TimerData *data);
 
 // Auto-cycle API: pulse-level profile switching driven from the trigger ISRs.
+bool trigger_pulses_per_profile(uint8_t n_profiles, uint32_t *pulses_per_profile);
 void auto_cycle_start(uint32_t pulses_per_profile);
 void auto_cycle_stop(void);
 bool auto_cycle_is_active(void);
 AutoCycleState_e auto_cycle_get_state(void);
 void auto_cycle_reset_pulse_counter(void);
+
+// Slave-side mirror of the auto-cycle above. Armed over I2C at START_SWTRIG,
+// every other timing input comes from this module's own copy of the trigger config.
+bool trigger_slave_arm(uint32_t pulses_per_profile);
+void trigger_slave_disarm(void);
+bool trigger_slave_is_armed(void);
+void TRIG_TIM15_IRQHandler(void);
 
 // Weak callback functions
 __weak void pulse_complete_callback(uint32_t curr_count, uint32_t total_count);

@@ -136,9 +136,9 @@ bool apply_next_profile_in_cycle(void)
 	}
 
 	// Apply delay profile, pattern profile (0-based selector on-chip), and
-	// apodization to all TX chips, then commit with the self-clearing LOAD_PROF bit.
-	uint8_t tx_count = get_tx_chip_count();
-	for (uint8_t txi = 0; txi < tx_count; txi++) {
+	// apodization to this module's TX chips, then commit with the self-clearing
+	// LOAD_PROF bit. Slaves run this same code against their own transmitters[].
+	for (uint8_t txi = 0; txi < TX_PER_MODULE; txi++) {
 		TX7332_SetActiveDelayProfile(next_profile, &transmitters[txi], txi);
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G1, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
 		TX7332_WriteReg(&transmitters[txi], PATTERN_PROFILE_SELECT_REG_G2, (next_profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
@@ -506,6 +506,51 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 	}
 }
 
+// Push trigger config to every slave.
+static bool set_slave_trigger_data(const UartPacket *cmd)
+{
+	UartPacket fwd_resp;
+
+	for (uint8_t m = 1; m < get_module_count(); m++) {
+		memset(&fwd_resp, 0, sizeof(fwd_resp));
+
+		process_i2c_forward(&fwd_resp, cmd, m);
+		if (fwd_resp.packet_type == OW_ERROR) {
+			//printf("[SWTRIG] module %u rejected the trigger config\r\n", m);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// Arm (or disarm) pulse-level profile cycling on every slave module.
+// Only the master generates a trigger, but the trigger net is shared, so each
+// module can advance its own execution order off the same edge.
+static bool set_slave_profile_cycles(bool arm)
+{
+	UartPacket fwd;
+	UartPacket fwd_resp;
+
+	for (uint8_t m = 1; m < get_module_count(); m++) {
+		memset(&fwd, 0, sizeof(fwd));
+		memset(&fwd_resp, 0, sizeof(fwd_resp));
+
+		fwd.packet_type = OW_CONTROLLER;
+		fwd.command = OW_CTRL_ARM_PROFILE_CYCLE;
+		fwd.addr = m;
+		fwd.reserved = arm ? 1U : 0U;   // slave reads this as arm/disarm
+
+		process_i2c_forward(&fwd_resp, &fwd, m);
+		if (fwd_resp.packet_type == OW_ERROR) {
+			//printf("[AUTO_CYCLE] module %u refused to %s\r\n", m, arm ? "arm" : "disarm");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 {
 	uint8_t module_id = 0;
@@ -611,19 +656,22 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Check if auto-cycle should be enabled
 			if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
 				// Validate: pulse_count must be divisible by number of profiles
-				uint32_t pulse_count = get_trigger_pulse_count();
-				uint8_t n_profiles = profile_cycle.exec_order_len;
-
-				if (pulse_count == 0 || (pulse_count % n_profiles) != 0) {
+				uint32_t pulses_per_profile = 0;
+				if (!trigger_pulses_per_profile(profile_cycle.exec_order_len, &pulses_per_profile)) {
 					uartResp->packet_type = OW_ERROR;
 					break;
 				}
 
-				uint32_t pulses_per_profile = pulse_count / n_profiles;
-
 				// Apply the first profile immediately before starting
 				profile_cycle.current_exec_index = 0;
 				if (!apply_next_profile_in_cycle()) {
+					uartResp->packet_type = OW_ERROR;
+					break;
+				}
+
+				// Arm the slaves before the first trigger edge goes out.
+				if (!set_slave_profile_cycles(true)) {
+					(void)set_slave_profile_cycles(false);
 					uartResp->packet_type = OW_ERROR;
 					break;
 				}
@@ -634,6 +682,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 					if (start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
 						uartResp->packet_type = OW_ERROR;
 						auto_cycle_stop();
+						(void)set_slave_profile_cycles(false);
 					}
 				}
 			} else {
@@ -657,6 +706,12 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			if (auto_cycle_is_active()) {
 				auto_cycle_stop();
 			}
+
+			// Slaves self-disarm on the trigger gap, but do it explicitly so
+			// they cannot react to a stray edge before the next sequence.
+			if (profile_cycle.is_configured) {
+				(void)set_slave_profile_cycles(false);
+			}
 			break;
 		case OW_CTRL_SET_SWTRIG:
 			uartResp->command = cmd->command;
@@ -664,32 +719,34 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-			if (module_id != 0){
-				// trigger is only on master
-				uartResp->packet_type = OW_ERROR;
-				uartResp->data = NULL;
-				break;
-			}
+			if (module_id == 0x00) {
+				// Clear any current trigger configs. Multi-profile solutions send
+				// OW_CTRL_SET_PROFILE_CYCLE again after this command.
+				auto_cycle_stop();
+				trigger_slave_disarm();   // no-op on the master
+				profile_cycle.is_configured = false;
+				profile_cycle.exec_order_len = 0;
+				profile_cycle.current_exec_index = 0;
 
-			// Clear any current trigger configs. Multi-profile solutions send
-			// OW_CTRL_SET_PROFILE_CYCLE again after this command.
-			auto_cycle_stop();
-			profile_cycle.is_configured = false;
-			profile_cycle.exec_order_len = 0;
-			profile_cycle.current_exec_index = 0;
-
-			if(!set_trigger_data((char *)cmd->data, cmd->data_len))
-			{
-				uartResp->packet_type = OW_ERROR;
-			}else{
-				// refresh state
-				if(!get_trigger_data(retTriggerJson, 0xFF))
+				if(!set_trigger_data((char *)cmd->data, cmd->data_len))
 				{
 					uartResp->packet_type = OW_ERROR;
 				}else{
-					uartResp->data_len = strlen(retTriggerJson);
-					uartResp->data = (uint8_t *)retTriggerJson;
+					if (get_device_role() == ROLE_MASTER && !set_slave_trigger_data(cmd)) {
+						uartResp->packet_type = OW_ERROR;
+					}
+
+					// refresh state
+					if(!get_trigger_data(retTriggerJson, 0xFF))
+					{
+						uartResp->packet_type = OW_ERROR;
+					}else{
+						uartResp->data_len = strlen(retTriggerJson);
+						uartResp->data = (uint8_t *)retTriggerJson;
+					}
 				}
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
 
 			break;
@@ -875,18 +932,24 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			uint8_t profile = cmd->data[0];
-			if (!IsValidProfile(profile)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
+			if (module_id == 0x00) {
+				uint8_t profile = cmd->data[0];
+				if (!IsValidProfile(profile)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				for (uint8_t i = 0; i < TX_PER_MODULE; i++) {
+					// Pattern profile selector is 0-based in the TX7332 registers.
+					TX7332_WriteReg(&transmitters[i], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+					TX7332_WriteReg(&transmitters[i], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
+
+					// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
+					TX7332_LoadProfile(&transmitters[i]);
+				}
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
-
-			// Pattern profile selector is 0-based in the TX7332 registers.
-			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
-			TX7332_WriteReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2, (profile - 1U) & PATTERN_PROFILE_SELECT_MASK);
-
-			// Commit selector changes on-chip (self-clearing LOAD_PROF bit).
-			TX7332_LoadProfile(&transmitters[cmd->addr]);
 
 			break;
 		}
@@ -902,74 +965,90 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
-			uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G1);
-			uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[cmd->addr], PATTERN_PROFILE_SELECT_REG_G2);
+			if (module_id == 0x00) {
+				uint32_t pattern_sel_g1 = TX7332_ReadReg(&transmitters[0], PATTERN_PROFILE_SELECT_REG_G1);
+				uint32_t pattern_sel_g2 = TX7332_ReadReg(&transmitters[0], PATTERN_PROFILE_SELECT_REG_G2);
 
-			uint8_t pattern_g1 = (uint8_t)(pattern_sel_g1 & PATTERN_PROFILE_SELECT_MASK);
-			uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
+				uint8_t pattern_g1 = (uint8_t)(pattern_sel_g1 & PATTERN_PROFILE_SELECT_MASK);
+				uint8_t pattern_g2 = (uint8_t)(pattern_sel_g2 & PATTERN_PROFILE_SELECT_MASK);
 
-			// Pattern selector is 0-based in hardware; convert to 1-based for host.
-			if ((pattern_g1 != pattern_g2) || !IsValidProfile(pattern_g1 + 1U)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
+				// Pattern selector is 0-based in hardware; convert to 1-based for host.
+				if ((pattern_g1 != pattern_g2) || !IsValidProfile(pattern_g1 + 1U)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				selected_profile_response = pattern_g1 + 1U;
+				uartResp->data = &selected_profile_response;
+				uartResp->data_len = 1;
+			} else {
+				cmd->data_len = 1;  // bytes for the slave to hand back
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
 
-			selected_profile_response = pattern_g1 + 1U;
-			uartResp->data = &selected_profile_response;
-			uartResp->data_len = 1;
 			break;
 		}
 		case OW_CTRL_SET_DELAY_PROFILE:
 		{
-			uartResp->command = cmd->command;
-			uartResp->addr = cmd->addr;
-			uartResp->reserved = cmd->reserved;
-			uartResp->data_len = 0;
+			if (module_id == 0x00){
+				uartResp->command = cmd->command;
+				uartResp->addr = cmd->addr;
+				uartResp->reserved = cmd->reserved;
+				uartResp->data_len = 0;
 
-			if (cmd->addr >= get_tx_chip_count()) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
+				if (cmd->addr >= get_tx_chip_count()) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
 
-			if (cmd->data_len < 1U) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
+				if (cmd->data_len < 1U) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
 
-			uint8_t profile = *((uint8_t *)cmd->data);
-			if (!IsValidProfile(profile)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
+				uint8_t profile = *((uint8_t *)cmd->data);
+				if (!IsValidProfile(profile)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
 
-			for (uint8_t i = 0; i < get_tx_chip_count(); i++) {
-				TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
+				// This module's chips only; slaves apply their own via the forward.
+				for (uint8_t i = 0; i < TX_PER_MODULE; i++) {
+					TX7332_SetActiveDelayProfile(profile, &transmitters[i], i);
+				}
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
 
 			break;
 		}
 		case OW_CTRL_GET_DELAY_PROFILE:
 		{
-			uartResp->command = cmd->command;
-			uartResp->addr = cmd->addr;
-			uartResp->reserved = cmd->reserved;
-			uartResp->data_len = 0;
+			if (module_id == 0x00){	
+				uartResp->command = cmd->command;
+				uartResp->addr = cmd->addr;
+				uartResp->reserved = cmd->reserved;
+				uartResp->data_len = 0;
 
-			if (cmd->addr >= get_tx_chip_count()) {
-				uartResp->packet_type = OW_ERROR;
-				return;
+				if (cmd->addr >= get_tx_chip_count()) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				uint8_t profile = 0U;
+				if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile) ||
+					!IsValidProfile(profile)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				selected_profile_response = profile;
+				uartResp->data = &selected_profile_response;
+				uartResp->data_len = 1;
+				break;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
 			}
-
-			uint8_t profile = 0U;
-			if (!TX7332_GetActiveDelayProfile(&transmitters[cmd->addr], &profile) ||
-				!IsValidProfile(profile)) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
-
-			selected_profile_response = profile;
-			uartResp->data = &selected_profile_response;
-			uartResp->data_len = 1;
 			break;
 		}
 		case OW_CTRL_SET_PROFILE_CYCLE:
@@ -980,67 +1059,110 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-			// Gating: Prevent cycle config changes while auto-cycle is running
+			// Prevent cycle config changes while auto-cycle is running
 			if (auto_cycle_is_active()) {
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 
-			if (cmd->data_len < PROFILE_CYCLE_HEADER_LEN) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
-
-			uint8_t *payload = (uint8_t *)cmd->data;
-			uint8_t n_profiles = payload[0];
-			uint8_t n_chips = payload[1];
-			uint8_t exec_order_len = payload[2];
-
-			// Validate ranges
-			if (n_profiles < 1 || n_profiles > MAX_PROFILES ||
-				n_chips < 1 || n_chips > TX_PER_MODULE ||
-				exec_order_len < 1 || exec_order_len > MAX_EXECUTION_ORDER) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
-
-			uint16_t expected_size = PROFILE_CYCLE_HEADER_LEN + (uint16_t)exec_order_len +
-				((uint16_t)n_profiles * (uint16_t)n_chips * (uint16_t)sizeof(uint32_t));
-			if (cmd->data_len < expected_size) {
-				uartResp->packet_type = OW_ERROR;
-				return;
-			}
-
-			profile_cycle.profile_count = n_profiles;
-			profile_cycle.exec_order_len = exec_order_len;
-			profile_cycle.current_exec_index = 0;
-
-			// Extract execution_order indices (1-based)
-			const uint8_t *exec_order_ptr = &payload[PROFILE_CYCLE_HEADER_LEN];
-			for (uint8_t i = 0; i < exec_order_len; i++) {
-				uint8_t profile_idx = exec_order_ptr[i];
-				if (profile_idx < 1 || profile_idx > n_profiles) {
+			// Every module keeps its own copy of the execution order and apodizations,
+			// so the host configures each slave.
+			if (module_id == 0x00) {
+				if (cmd->data_len < PROFILE_CYCLE_HEADER_LEN) {
 					uartResp->packet_type = OW_ERROR;
 					return;
 				}
-				profile_cycle.execution_order[i] = profile_idx;
-			}
 
-			// Extract pre-computed apodization registers per profile per chip (little-endian uint32)
-			uint8_t *apod_data_ptr = &payload[PROFILE_CYCLE_HEADER_LEN + exec_order_len];
-			for (uint8_t p = 0; p < n_profiles; p++) {
-				for (uint8_t c = 0; c < n_chips; c++) {
-					uint8_t *reg_ptr = &apod_data_ptr[(p * n_chips + c) * sizeof(uint32_t)];
-					apod_registers[p][c] = (uint32_t)reg_ptr[0]
-						| ((uint32_t)reg_ptr[1] << 8)
-						| ((uint32_t)reg_ptr[2] << 16)
-						| ((uint32_t)reg_ptr[3] << 24);
+				uint8_t *payload = (uint8_t *)cmd->data;
+				uint8_t n_profiles = payload[0];
+				uint8_t n_chips = payload[1];
+				uint8_t exec_order_len = payload[2];
+
+				// Validate ranges
+				if (n_profiles < 1 || n_profiles > MAX_PROFILES ||
+					n_chips < 1 || n_chips > TX_PER_MODULE ||
+					exec_order_len < 1 || exec_order_len > MAX_EXECUTION_ORDER) {
+					uartResp->packet_type = OW_ERROR;
+					return;
 				}
-			}
 
-			profile_cycle.is_configured = true;
+				uint16_t expected_size = PROFILE_CYCLE_HEADER_LEN + (uint16_t)exec_order_len +
+					((uint16_t)n_profiles * (uint16_t)n_chips * (uint16_t)sizeof(uint32_t));
+				if (cmd->data_len < expected_size) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+
+				profile_cycle.profile_count = n_profiles;
+				profile_cycle.exec_order_len = exec_order_len;
+				profile_cycle.current_exec_index = 0;
+
+				// Extract execution_order indices (1-based)
+				const uint8_t *exec_order_ptr = &payload[PROFILE_CYCLE_HEADER_LEN];
+				for (uint8_t i = 0; i < exec_order_len; i++) {
+					uint8_t profile_idx = exec_order_ptr[i];
+					if (profile_idx < 1 || profile_idx > n_profiles) {
+						uartResp->packet_type = OW_ERROR;
+						return;
+					}
+					profile_cycle.execution_order[i] = profile_idx;
+				}
+
+				// Extract pre-computed apodization registers per profile per chip (little-endian uint32)
+				uint8_t *apod_data_ptr = &payload[PROFILE_CYCLE_HEADER_LEN + exec_order_len];
+				for (uint8_t p = 0; p < n_profiles; p++) {
+					for (uint8_t c = 0; c < n_chips; c++) {
+						uint8_t *reg_ptr = &apod_data_ptr[(p * n_chips + c) * sizeof(uint32_t)];
+						apod_registers[p][c] = (uint32_t)reg_ptr[0]
+							| ((uint32_t)reg_ptr[1] << 8)
+							| ((uint32_t)reg_ptr[2] << 16)
+							| ((uint32_t)reg_ptr[3] << 24);
+					}
+				}
+
+				profile_cycle.is_configured = true;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
+			}
 
 			// Success response
+			break;
+		}
+		case OW_CTRL_ARM_PROFILE_CYCLE:
+		{
+			// Master -> slave only. Arm this module to advance its
+			// execution order off the shared trigger line.
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+
+			if (module_id != 0 || get_device_role() == ROLE_MASTER) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			if (cmd->reserved == 0) {
+				trigger_slave_disarm();
+				break;
+			}
+
+			if (!profile_cycle.is_configured || profile_cycle.exec_order_len == 0) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			// Same formula the master runs, over the trigger config it fanned
+			// out to us and our own execution order.
+			uint32_t pulses_per_profile = 0;
+			if (!trigger_pulses_per_profile(profile_cycle.exec_order_len, &pulses_per_profile) ||
+				!trigger_slave_arm(pulses_per_profile)) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
+			// Start on the same profile the master applied before triggering.
+			reset_profile_cycle_to_start();
 			break;
 		}
 		default:

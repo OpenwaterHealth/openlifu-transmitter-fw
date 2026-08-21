@@ -117,7 +117,8 @@ typedef enum {
 	OW_CTRL_GET_DELAY_PROFILE = 0x1E,
 	OW_CTRL_SET_PROFILE_CYCLE = 0x1F,
 	OW_CTRL_SET_PATTERN_PROFILE = 0x28,  // 0x28 and 0x29 skip the UstxTX7332Commands block since we're out of hex values
-	OW_CTRL_GET_PATTERN_PROFILE = 0x29, 
+	OW_CTRL_GET_PATTERN_PROFILE = 0x29,
+	OW_CTRL_ARM_PROFILE_CYCLE = 0x2A,    // master -> slave(s) only, cycle profiles off the shared trigger line
 } UstxControllerCommands;
 
 typedef enum {
