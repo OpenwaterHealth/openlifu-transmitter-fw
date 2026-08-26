@@ -127,6 +127,28 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/demo.c
 )
 
+# Bench one-shot: fire a single bounded demo pulse sequence at boot, with no USB host
+# present. Bench/bring-up only - never enable for a shipping build.
+option(BENCH_DEMO_ONESHOT "Fire one demo pulse sequence at boot (bench, no USB host)" OFF)
+
+set(PULSE_FREQ_HZ "" CACHE STRING
+    "Bench pulse repetition frequency in Hz (blank = the default in Core/Src/main.c)")
+set(PULSE_COUNT "" CACHE STRING "Bench pulses per train")
+set(PULSE_TRAIN_COUNT "" CACHE STRING "Bench trains per run")
+set(PULSE_DURATION_USEC "" CACHE STRING "Bench trigger pulse width in microseconds")
+
+if(BENCH_DEMO_ONESHOT)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE BENCH_DEMO_ONESHOT)
+    message(STATUS "Bench one-shot demo sequence: ENABLED")
+    foreach(bench_var PULSE_FREQ_HZ PULSE_COUNT
+                      PULSE_TRAIN_COUNT PULSE_DURATION_USEC)
+        if(${bench_var})
+            target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ${bench_var}=${${bench_var}}u)
+            message(STATUS "Bench ${bench_var} = ${${bench_var}}")
+        endif()
+    endforeach()
+endif()
+
 if(DEBUG_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/logging.c)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE DEBUG_ENABLED)
