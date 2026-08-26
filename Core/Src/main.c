@@ -44,6 +44,10 @@
 #include <string.h>
 #include <math.h>
 
+#ifdef BENCH_DEMO_ONESHOT
+#include "demo.h"
+#endif
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,12 +66,42 @@
 _Static_assert(TX_OVERHEAT_HYSTERESIS <= TX_OVERHEAT_TRIP_POINT,
                "TX_OVERHEAT_HYSTERESIS must not exceed TX_OVERHEAT_TRIP_POINT");
 
+#ifdef BENCH_DEMO_ONESHOT
+/* Pulse sequence, which can be overriden from CMake.
+ * Variable names mirror Sequence() from single_pulse.py
+ * https://github.com/OpenwaterHealth/openlifu-sdk/blob/main/examples/single_pulse.py */
+#ifndef PULSE_FREQ_HZ
+#define PULSE_FREQ_HZ        20u   /* SDK pulse_interval */
+#endif
+#ifndef PULSE_DURATION_USEC
+#define PULSE_DURATION_USEC  2000u /* SDK duration_msec; here the trigger gate */
+#endif
+#ifndef PULSE_COUNT
+#define PULSE_COUNT          5u    /* SDK pulse_count */
+#endif
+#ifndef PULSE_TRAIN_COUNT
+#define PULSE_TRAIN_COUNT    1u    /* SDK pulse_train_count */
+#endif
+#define PULSE_TRAIN_INTERVAL 0u    /* SDK pulse_train_interval; one-shot needs 0 */
+#define PULSE_ARM_DELAY_MSEC 2000u
+
+/* Run length = PULSE_COUNT x PULSE_TRAIN_COUNT / PULSE_FREQ_HZ seconds. TIM15
+ * counts at 1 MHz into a 16-bit auto-reload register loaded as (width * 2) - 1.
+ * https://www.st.com/resource/en/reference_manual/dm00151940-stm32l41xxx42xxx43xxx44xxx45xxx46xxx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf */
+_Static_assert(PULSE_DURATION_USEC <= 32767u, "gate must fit TIM15 ARR as (width * 2) - 1");
+_Static_assert(2u * PULSE_DURATION_USEC < 1000000u / PULSE_FREQ_HZ, "two gates must fit one period");
+
+/* pulse_state, read over SWD by symbol name: https://developer.arm.com/documentation/ihi0031/latest/ */
+enum { PULSE_BOOT, PULSE_ARMED, PULSE_FIRED, PULSE_COMPLETE,
+       PULSE_START_FAILED, PULSE_BLOCKED_OVERHEAT, PULSE_ABORTED_OVERHEAT };
+#endif
+
 #define BL_BKP_SIGNATURE (0x4F57424CU)     /* 'OWBL' */
 #define BL_BKP_REQ_DFU_MAGIC (0x21554644U) /* 'DFU!' */
 
 /* STM32L4 system-memory (ROM) bootloader entry point */
 #define STM32_SYS_BL_ADDR   (0x1FFF0000U)
-/* Our custom bootloader occupies 0x08000000..0x0800FFFF (62 KB) */
+/* custom bootloader occupies 0x08000000..0x0800FFFF (62 KB) */
 #define CUSTOM_BL_START     (0x08000000U)
 #define CUSTOM_BL_END       (0x08010000U)
 
@@ -412,6 +446,112 @@ static void Detect_MAX31875_Bus(void)
     Error_Handler();
   }
 }
+
+#ifdef BENCH_DEMO_ONESHOT
+/* Normally, a pulse sequence is not fired because of a
+ * Variables are first defined above from lines ~73, also reference SEND-PULSES.md
+ * https://developer.arm.com/documentation/ihi0031/latest/ */
+volatile uint32_t pulse_state = PULSE_BOOT;  /* PULSE_* above */
+volatile uint32_t pulse_start_result = 0;          /* TriggerStatus from start_trigger_pulse() */
+volatile uint32_t pulse_regs_verified = 0;         /* bit N set = TX7332 N read back its whole demo profile */
+volatile uint32_t pulse_clock_ok = 0;              /* ConfigureClock() return, discarded everywhere else */
+volatile uint32_t pulse_fire_tick = 0;             /* HAL_GetTick() just before the trigger started, ms */
+volatile uint32_t pulse_done_tick = 0;             /* HAL_GetTick() when the main loop saw it finish, ms */
+volatile uint32_t pulse_duration_msec = 0;           /* done - fire; includes main-loop poll latency */
+
+/* Reads values from 3 registers. register information from tx7332.c and demo.c */
+
+#define PULSE_PROBE_COUNT 3
+static const uint16_t pulse_probe_addr[PULSE_PROBE_COUNT] = { 0x18, 0x20, 0x22 };
+/* Expected read-back, from reg_values[] in demo.c: 0x18 = 0x02000003,
+ * 0x20 = 0x1FFF1770, 0x22 = 0x0E1004B0. */
+volatile uint32_t pulse_probe_read[TX_PER_MODULE][PULSE_PROBE_COUNT];
+
+/* Fire exactly one pulse sequence without a USB host.
+ * Called on every main-loop pass, first call arms and fires, later calls
+ * watch for completion with LED and the overheat check continuing to run.
+ */
+static void fire_pulse_sequence(void)
+{
+  static bool fired = false;
+
+  if (fired)
+  {
+    /* SEQUENCE mode returns the trigger to READY once the last train completes -
+     * there is a thermal trip implemented in stop_trigger_pulse(). */
+    if (pulse_state == PULSE_FIRED && get_trigger_status() == TRIGGER_STATUS_READY)
+    {
+      pulse_done_tick = HAL_GetTick();
+      pulse_duration_msec = pulse_done_tick - pulse_fire_tick;
+      pulse_state = tx_overheat_flag ? PULSE_ABORTED_OVERHEAT : PULSE_COMPLETE;
+    }
+    return;
+  }
+  fired = true;
+
+  OW_TimerData timerDataConfig;
+  timerDataConfig.TriggerFrequencyHz = PULSE_FREQ_HZ;
+  timerDataConfig.TriggerPulseWidthUsec = PULSE_DURATION_USEC;
+  timerDataConfig.TriggerPulseCount = PULSE_COUNT;
+  timerDataConfig.TriggerPulseTrainCount = PULSE_TRAIN_COUNT;
+  timerDataConfig.TriggerPulseTrainInterval = PULSE_TRAIN_INTERVAL;
+  timerDataConfig.TriggerMode = TRIGGER_MODE_SEQUENCE;
+  timerDataConfig.ProfileIncrement = 0;
+  timerDataConfig.ProfileIndex = 0;
+
+  ConfigureResetPin(true);
+  init_trigger_pulse(timerDataConfig);
+
+  // 2MHz REF CLK
+  Setup_Reference_Clock();
+  // reset clock chip
+  HAL_GPIO_WritePin(PDN_GPIO_Port, PDN_Pin, GPIO_PIN_SET);
+  HAL_Delay(10);
+
+  // clock chip setup
+  pulse_clock_ok = ConfigureClock() ? 1u : 0u;
+  FW_DEBUG("Bench: clock configured\r\n");
+
+  /* Load the demo pulse profile the host would normally send (OW_TX7332_DEMO). */
+  for (uint8_t i = 0; i < TX_PER_MODULE; i++)
+  {
+    write_demo_registers(&transmitters[i]);
+    if (verify_demo_registers(&transmitters[i]))
+    {
+      pulse_regs_verified |= (1u << i);
+    }
+    for (uint8_t p = 0; p < PULSE_PROBE_COUNT; p++)
+    {
+      pulse_probe_read[i][p] = TX7332_ReadReg(&transmitters[i], pulse_probe_addr[p]);
+    }
+  }
+  FW_DEBUG("Bench: demo registers written\r\n");
+
+  pulse_state = PULSE_ARMED;
+  HAL_Delay(PULSE_ARM_DELAY_MSEC);
+
+  /* Sample the temperature once before the temperature sampling loop. */
+  float arm_temp = Thermistor_ReadTemperature();
+  if (!isnan(arm_temp) && (arm_temp > -50.0f) && (arm_temp < 150.0f))
+  {
+    tx_temperature = arm_temp;
+    tx_overheat_flag = (arm_temp >= TX_OVERHEAT_TRIP_POINT);
+
+  }
+
+  if (tx_overheat_flag)
+  {
+    pulse_state = PULSE_BLOCKED_OVERHEAT;
+    return;
+  }
+
+  pulse_fire_tick = HAL_GetTick();
+  pulse_start_result = start_trigger_pulse();
+  pulse_state = (pulse_start_result == TRIGGER_STATUS_RUNNING) ? PULSE_FIRED
+                                                              : PULSE_START_FAILED;
+  FW_DEBUG("Bench: sequence started\r\n");
+}
+#endif /* BENCH_DEMO_ONESHOT */
 /* USER CODE END 0 */
 
 /**
@@ -559,6 +699,11 @@ int main(void)
 
     if (!get_configured())
     {
+#ifdef BENCH_DEMO_ONESHOT
+      /* Since there is no USB host run one demo sequence locally instead of
+       * waiting for a role to be assigned over USB */
+      fire_pulse_sequence();
+#else
       // start listen
       if (get_device_role() == ROLE_MASTER)
       {
@@ -632,6 +777,7 @@ int main(void)
           _usb_interrupt_flag = false;
         }
       }
+#endif /* BENCH_DEMO_ONESHOT */
     }
     else
     {
@@ -673,7 +819,7 @@ int main(void)
           if(get_trigger_status() == TRIGGER_STATUS_RUNNING) {
             stop_trigger_pulse();
             // send update
-            
+
           }
         }
       }

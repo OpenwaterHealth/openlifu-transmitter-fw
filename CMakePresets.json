@@ -25,6 +25,16 @@
             }
         },
         {
+            "name": "ReleaseBench",
+            "inherits": "default",
+            "displayName": "Release (Bench one-shot)",
+            "description": "Standalone release build that fires one demo pulse sequence at boot with no USB host. Bench bring-up only.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BENCH_DEMO_ONESHOT": "ON"
+            }
+        },
+        {
             "name": "DebugBL",
             "inherits": "default",
             "displayName": "Debug (Bootloader)",
@@ -53,6 +63,10 @@
         {
             "name": "Release",
             "configurePreset": "Release"
+        },
+        {
+            "name": "ReleaseBench",
+            "configurePreset": "ReleaseBench"
         },
         {
             "name": "DebugBL",
