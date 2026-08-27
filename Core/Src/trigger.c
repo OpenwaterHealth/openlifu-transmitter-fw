@@ -3,12 +3,12 @@
 #include "if_commands.h"
 #include "module_manager.h"
 
- #include "jsmn.h"
+#include "jsmn.h"
 
- #include <stdio.h>
- #include <string.h>
- #include <stdbool.h>
- #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 // Internal state variables
 static volatile uint32_t _pulseCount = 0;
@@ -39,7 +39,6 @@ static AutoCycleContext_t _auto_cycle = {
 typedef struct {
 	bool armed;                    // TIM15 is watching the shared trigger line
 	bool cycling;                  // still advancing the execution order
-	bool stop_after_train;         // free-running continuous: stop with the master
 	uint32_t pulses_per_profile;
 	uint32_t pulse_count;          // pulses per train, 0 = no train boundary
 	uint32_t train_count;          // trains per sequence, 0 = continuous
@@ -656,15 +655,21 @@ void TRIG_TIM1_IRQHandler(void) {
     // interrupt late in this trigger period (see schedule_profile_action).
     if (_auto_cycle.is_active) {
         _auto_cycle.pulse_counter_in_profile++;
-        if (_auto_cycle.pulse_counter_in_profile >= _auto_cycle.pulses_per_profile
-            && _pulseCount < _timerDataConfig.TriggerPulseCount) {
+        if (_auto_cycle.pulse_counter_in_profile >= _auto_cycle.pulses_per_profile) {
             _auto_cycle.pulse_counter_in_profile = 0;
-            schedule_profile_action(PROFILE_ACTION_SWITCH);
+            bool pass_done = (_pulseCount % _timerDataConfig.TriggerPulseCount) == 0U;
+            if (_timerDataConfig.TriggerPulseTrainInterval == 0 &&
+                _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS) {
+                // Free-run: restart the order each pass instead of holding the last profile.
+                schedule_profile_action(pass_done ? PROFILE_ACTION_RESET : PROFILE_ACTION_SWITCH);
+            } else if (!pass_done) {
+                schedule_profile_action(PROFILE_ACTION_SWITCH);
+            }
         }
     }
 
 	if(_timerDataConfig.TriggerPulseTrainInterval == 0 && _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS){
-		// do anything needed here
+		// Free-run - the raster sequence wrapping is in the auto-cycle block above.
 	}
 	else if(_pulseCount>=_timerDataConfig.TriggerPulseCount)
     {
@@ -771,7 +776,6 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 	uint32_t period_us = get_trigger_period_us();
 	uint32_t pulse_count = _timerDataConfig.TriggerPulseCount;
 	uint32_t train_count;
-	bool stop_after_train = false;
 
 	if (get_device_role() == ROLE_MASTER) return false;
 	if (pulses_per_profile == 0U || period_us <= MIN_PROFILE_SWITCH_US) return false;
@@ -782,8 +786,6 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 		break;
 	case TRIGGER_MODE_CONTINUOUS:
 		train_count = 0;
-		// master stops switching after TriggerPulseCount pulses, so stop there too
-		stop_after_train = (_timerDataConfig.TriggerPulseTrainInterval == 0);
 		break;
 	default:
 		train_count = _timerDataConfig.TriggerPulseTrainCount;
@@ -836,7 +838,6 @@ bool trigger_slave_arm(uint32_t pulses_per_profile)
 
 	_slave.armed = true;
 	_slave.cycling = true;
-	_slave.stop_after_train = stop_after_train;
 	_slave.pulses_per_profile = pulses_per_profile;
 	_slave.pulse_count = pulse_count;
 	_slave.train_count = train_count;
@@ -893,10 +894,6 @@ static void slave_dead_time_tick(void)
 	if (_slave.pulse_count != 0U && _slave.pulse_in_train >= _slave.pulse_count) {
 		_slave.pulse_in_train = 0;
 		_slave.pulse_in_profile = 0;
-		if (_slave.stop_after_train) {
-			_slave.cycling = false;
-			return;
-		}
 		_slave.trains_done++;
 		if (_slave.train_count != 0U && _slave.trains_done >= _slave.train_count) {
 			_slave.cycling = false;
