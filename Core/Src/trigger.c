@@ -644,65 +644,77 @@ void TRIG_TIM2_IRQHandler(void) {
 	}
 }
 
+// Pulse-level profile switching: the trigger edge that raised this interrupt
+// also started an acoustic burst that keeps sounding for the TX7332 pattern
+// duration, so the SPI writes are deferred to the compare interrupt late in
+// this trigger period (see schedule_profile_action).
+static void handle_auto_cycle_pulse_switch(void)
+{
+    if (!_auto_cycle.is_active) return;
+
+    _auto_cycle.pulse_counter_in_profile++;
+    if (_auto_cycle.pulse_counter_in_profile < _auto_cycle.pulses_per_profile) return;
+
+    _auto_cycle.pulse_counter_in_profile = 0;
+    bool pass_done = (_pulseCount % _timerDataConfig.TriggerPulseCount) == 0U;
+    if (_timerDataConfig.TriggerPulseTrainInterval == 0 &&
+        _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS) {
+        // Free-run: restart the order each pass instead of holding the last profile.
+        schedule_profile_action(pass_done ? PROFILE_ACTION_RESET : PROFILE_ACTION_SWITCH);
+    } else if (!pass_done) {
+        schedule_profile_action(PROFILE_ACTION_SWITCH);
+    }
+}
+
+// Back-to-back train boundary (TriggerPulseTrainInterval == 0). Returns true
+// if TRIG_TIM1_IRQHandler should return immediately without reporting the
+// pulse that just completed.
+static bool handle_back_to_back_train_boundary(void)
+{
+    _trainCount++;
+    if (_timerDataConfig.TriggerMode == TRIGGER_MODE_SINGLE) {
+        stop_after_final_pulse();
+        return true;
+    }
+
+    if (_timerDataConfig.TriggerMode == TRIGGER_MODE_SEQUENCE &&
+        _trainCount >= _timerDataConfig.TriggerPulseTrainCount) {
+        stop_after_final_pulse();
+        return true;
+    }
+
+    // Back-to-back restart, one-shot PWM deliberately not stopped here.
+    _pulseCount = 0;
+
+    // Reset pulse-level profile cycling for the new pulse train
+    // (deferred: the final pulse's burst is still sounding here)
+    if (_auto_cycle.is_active) {
+        _auto_cycle.pulse_counter_in_profile = 0;
+        schedule_profile_action(PROFILE_ACTION_RESET);
+    }
+
+    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
+    HAL_TIM_Base_Start_IT(&LORES_TIMER);
+    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
+    return true;
+}
+
 void TRIG_TIM1_IRQHandler(void) {
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return;
 
     _pulseCount++;
 
-    // Pulse-level profile switching: the trigger edge that raised this
-    // interrupt also started an acoustic burst that keeps sounding for the
-    // TX7332 pattern duration, so the SPI writes are deferred to the compare
-    // interrupt late in this trigger period (see schedule_profile_action).
-    if (_auto_cycle.is_active) {
-        _auto_cycle.pulse_counter_in_profile++;
-        if (_auto_cycle.pulse_counter_in_profile >= _auto_cycle.pulses_per_profile) {
-            _auto_cycle.pulse_counter_in_profile = 0;
-            bool pass_done = (_pulseCount % _timerDataConfig.TriggerPulseCount) == 0U;
-            if (_timerDataConfig.TriggerPulseTrainInterval == 0 &&
-                _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS) {
-                // Free-run: restart the order each pass instead of holding the last profile.
-                schedule_profile_action(pass_done ? PROFILE_ACTION_RESET : PROFILE_ACTION_SWITCH);
-            } else if (!pass_done) {
-                schedule_profile_action(PROFILE_ACTION_SWITCH);
-            }
-        }
-    }
+    handle_auto_cycle_pulse_switch();
 
 	if(_timerDataConfig.TriggerPulseTrainInterval == 0 && _timerDataConfig.TriggerMode == TRIGGER_MODE_CONTINUOUS){
 		// Free-run - the raster sequence wrapping is in the auto-cycle block above.
 	}
 	else if(_pulseCount>=_timerDataConfig.TriggerPulseCount)
     {
-
         __HAL_TIM_DISABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
         HAL_TIM_Base_Stop_IT(&LORES_TIMER);
-        if(_timerDataConfig.TriggerPulseTrainInterval == 0) {
-			_trainCount++;
-        	if(_timerDataConfig.TriggerMode == TRIGGER_MODE_SINGLE)
-        	{
-		        stop_after_final_pulse();
-        		return;
-        	} else {
-				if (_timerDataConfig.TriggerMode == TRIGGER_MODE_SEQUENCE &&
-					_trainCount >= _timerDataConfig.TriggerPulseTrainCount) {
-					stop_after_final_pulse();
-					return;
-				}
-				// Back-to-back restart, one-shot PWM deliberately not stopped here.
-				_pulseCount = 0;
-
-				// Reset pulse-level profile cycling for the new pulse train
-				// (deferred: the final pulse's burst is still sounding here)
-				if (_auto_cycle.is_active) {
-				    _auto_cycle.pulse_counter_in_profile = 0;
-				    schedule_profile_action(PROFILE_ACTION_RESET);
-				}
-
-				__HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
-				HAL_TIM_Base_Start_IT(&LORES_TIMER);
-				pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
-				return;
-        	}
+        if(_timerDataConfig.TriggerPulseTrainInterval == 0 && handle_back_to_back_train_boundary()) {
+            return;
     	}
     }
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
