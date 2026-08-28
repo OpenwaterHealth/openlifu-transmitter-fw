@@ -13,6 +13,8 @@
         {
             "name": "Debug",
             "inherits": "default",
+            "displayName": "Debug (Bootloader slot)",
+            "description": "Debug build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug"
             }
@@ -20,28 +22,30 @@
         {
             "name": "Release",
             "inherits": "default",
+            "displayName": "Release (Bootloader slot)",
+            "description": "Release build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. This is the image that gets signed.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
         },
         {
-            "name": "DebugBL",
+            "name": "Debug-BareMetal",
             "inherits": "default",
-            "displayName": "Debug (Bootloader)",
-            "description": "Debug build for use with bootloader: FLASH @ 0x08010000, VTOR offset 0x00010000",
+            "displayName": "Debug (Bare metal)",
+            "description": "Standalone debug build, no bootloader: FLASH @ 0x08000000",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "BOOTLOADER_BUILD": "ON"
+                "BARE_METAL": "ON"
             }
         },
         {
-            "name": "ReleaseBL",
+            "name": "Release-BareMetal",
             "inherits": "default",
-            "displayName": "Release (Bootloader)",
-            "description": "Release build for use with bootloader: FLASH @ 0x08010000, VTOR offset 0x00010000",
+            "displayName": "Release (Bare metal)",
+            "description": "Standalone release build, no bootloader: FLASH @ 0x08000000",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "BOOTLOADER_BUILD": "ON"
+                "BARE_METAL": "ON"
             }
         }
     ],
@@ -55,12 +59,12 @@
             "configurePreset": "Release"
         },
         {
-            "name": "DebugBL",
-            "configurePreset": "DebugBL"
+            "name": "Debug-BareMetal",
+            "configurePreset": "Debug-BareMetal"
         },
         {
-            "name": "ReleaseBL",
-            "configurePreset": "ReleaseBL"
+            "name": "Release-BareMetal",
+            "configurePreset": "Release-BareMetal"
         }
     ]
 }

@@ -21,6 +21,7 @@ uint8_t crc_test(void);
 void get_unique_identifier(uint32_t* uid);
 uint32_t fnv1a_32(const uint8_t *data, size_t len);
 void printBuffer(const uint8_t* buffer, uint32_t size);
+void delay_us(uint32_t us);
 
 #ifdef DEBUG_ENABLED
 #define FW_DEBUG(fmt, ...) printf("[FW] " fmt, ##__VA_ARGS__)

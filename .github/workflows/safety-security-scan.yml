@@ -1,0 +1,90 @@
+name: "Medical Firmware Safety & Security Scan"
+
+on:
+  push:
+    branches: [ main, next ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Analysis Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+          pip3 install lizard
+
+      # 1. Cppcheck with MISRA-C:2012 and Safety focus
+      # --error-exitcode=1 ensures the build fails on findings
+      - name: Run Cppcheck (Safety & Standards)
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+                   --std=c11 \
+                   --error-exitcode=1 \
+                   --force \
+                   --inline-suppr \
+                   --template="[{severity}] {file}:{line} {id} - {message}" \
+                   --suppress=missingIncludeSystem \
+                   --suppress=*:Core/Src/lwrb.c \
+                   --suppress=*:Core/Src/jsmn.c \
+                   --suppress=*:Core/Src/system_stm32l4xx.c \
+                   --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
+                   --suppress=*:Core/Src/syscalls.c \
+                   ./Core/Src ./USB_DEVICE/App
+
+      # 2. Complexity Analysis (Lizard)
+      # IEC 62304 recommends low cyclomatic complexity for testability.
+      # Fails if any function exceeds a complexity of 15.
+      # Third-party and ST-generated files are excluded; command-dispatcher
+      # functions that are structurally complex by design are whitelisted
+      # in lizard_whitelist.csv.
+      - name: Check Code Complexity (IEC 62304 Requirement)
+        run: |
+          lizard ./Core/Src ./USB_DEVICE/App \
+            -C 15 -L 100 -w \
+            -x "*/jsmn.c" \
+            -x "*/system_stm32l4xx.c" \
+            -x "*/stm32l4xx_hal_msp.c" \
+            --whitelist lizard_whitelist.csv
+
+      # 3. Vulnerability Scan against the committed SBOM
+      # grype consumes the CycloneDX SBOM and checks each component against
+      # the Grype vulnerability database (NVD, OSV, GHSA, and others).
+      # Fails the build on any HIGH or CRITICAL finding.
+      - name: Scan SBOM for Vulnerabilities (grype)
+        id: grype
+        uses: anchore/scan-action@v6
+        with:
+          sbom: "sbom.cdx.json"
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+
+      # 4. Upload SARIF results to GitHub Security tab
+      # Makes vulnerability findings visible in the repository's Security view.
+      # Code Scanning (Security tab) requires GitHub Advanced Security, which is
+      # off by default on private repos. Don't fail the scan if it isn't enabled:
+      # grype already gates the build on HIGH/CRITICAL CVEs, and the SARIF is kept
+      # as a build artifact below. Remove continue-on-error once GHAS is enabled.
+      - name: Upload SARIF to GitHub Security
+        if: always() && steps.grype.conclusion != 'skipped'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+
+      # 5. Upload Audit Artifacts
+      # Keeps a record of the scan results for regulatory submission.
+      - name: Archive Regulatory Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-compliance-report
+          path: |
+            sbom.cdx.json
+            ${{ steps.grype.outputs.sarif }}

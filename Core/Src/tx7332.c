@@ -1,7 +1,8 @@
 #include "main.h"
 #include "tx7332.h"
-#include <stdio.h>
+#include "common.h"
 #include <stdbool.h>
+#include <string.h>
 
 #define COMMS_TIMEOUT 250
 
@@ -12,20 +13,18 @@ static const int READ_DIE2 = (1 << 2);
 static const int LOAD_PROF = (1 << 3);
 static const int BURST_WR_EN = (1 << 8);
 
+uint32_t apod_registers[MAX_PROFILES][TX_PER_MODULE];
+uint32_t active_apod_registers[TX_PER_MODULE];
+
+static void apply_profile_apodization(TX7332* device, uint8_t chip_index, uint8_t profile_index);
+
+
 static const uint32_t SwapEndian(uint32_t val) {
 	val = (val >> 24) |
 		  ((val >> 8) & 0xFF00) |
 		  ((val << 8) & 0xFF0000) |
 		  ((val << 24));
 	return val;
-}
-
-static uint32_t SE(uint32_t val) {
-  val = (val >> 24) |
-		((val >> 8) & 0xFF00) |
-		((val << 8) & 0xFF0000) |
-		((val << 24));
-  return val;
 }
 
 // Private function implementation
@@ -155,8 +154,11 @@ bool TX7332_WriteBulkVerify(TX7332* device, uint16_t addr, uint32_t* be_bytes, i
 
     // Verify each written value
     for (int i = 0; i < len; ++i) {
-        uint32_t expectedValue = SE(be_bytes[i]); // Convert to the expected format
+        uint32_t expectedValue = be_bytes[i];
         uint32_t readValue = TX7332_ReadReg(device, addr + i);
+        if (addr + i == TX7332_PATTERN_MODE_REGISTER) {
+            readValue &= TX7332_PATTERN_MODE_READ_MASK;
+        }
 
         if (readValue != expectedValue) {
             // Optional: Print a message if a mismatch occurs
@@ -191,3 +193,65 @@ void TX7332_LoadProfile(TX7332* device) {
     TX7332_WriteReg(device, 0, LOAD_PROF);
 }
 
+
+static uint32_t BuildDelayProfileSelectValue(uint8_t profile)
+{
+	uint32_t delay_profile_field = (uint32_t)(profile - 1U) & BF_PROF_SEL_FIELD_MASK;
+
+    // Build selector register value directly from requested profile.
+    uint32_t next_reg = 0U;
+	next_reg |= (delay_profile_field << BF_PROF_SEL_G1_SHIFT);
+	next_reg |= (delay_profile_field << BF_PROF_SEL_G2_SHIFT);
+	return next_reg;
+}
+
+void TX7332_SetActiveDelayProfile(uint8_t profile, TX7332* device, uint8_t chip_index)
+{
+    uint32_t delay_select_reg = BuildDelayProfileSelectValue(profile);
+
+    TX7332_WriteReg(device, DELAY_PROFILE_SELECT_REGISTER, delay_select_reg);
+
+    // Commit selector changes on-chip (self-clearing LOAD_PROF bit).
+    TX7332_LoadProfile(device);
+
+    // Apply the corresponding apodization for the selected delay profile.
+    apply_profile_apodization(device, chip_index, profile);
+}
+
+bool TX7332_GetActiveDelayProfile(TX7332* device, uint8_t* profile)
+{
+	if (device == NULL || profile == NULL) {
+		return false;
+	}
+
+    uint32_t delay_select_reg_raw = TX7332_ReadReg(device, DELAY_PROFILE_SELECT_REGISTER);
+    uint8_t delay_g1 = (uint8_t)((delay_select_reg_raw >> BF_PROF_SEL_G1_SHIFT) & BF_PROF_SEL_FIELD_MASK);
+    uint8_t delay_g2 = (uint8_t)((delay_select_reg_raw >> BF_PROF_SEL_G2_SHIFT) & BF_PROF_SEL_FIELD_MASK);
+
+	if (delay_g1 != delay_g2) {
+		return false;
+	}
+
+	*profile = (uint8_t)(delay_g1 + 1U);
+	return true;
+}
+
+static void apply_profile_apodization(TX7332* device, uint8_t chip_index, uint8_t profile_index)
+{
+    if (device == NULL || profile_index < 1U || profile_index > MAX_PROFILES) {
+		return;
+	}
+
+	uint8_t apod_profile = (uint8_t)(profile_index - 1U);
+
+	// Write the pre-computed apodization register from SDK.
+	uint32_t apod_reg = apod_registers[apod_profile][chip_index];
+	active_apod_registers[chip_index] = apod_reg;
+	TX7332_WriteReg(device, TX7332_APODIZATION_REGISTER, apod_reg);
+}
+
+void TX7332_ResetApodizations(void)
+{
+    memset(apod_registers, 0, sizeof(apod_registers));
+    memset(active_apod_registers, 0, sizeof(active_apod_registers));
+}

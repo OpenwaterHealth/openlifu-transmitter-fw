@@ -23,7 +23,7 @@
 
 /* USER CODE BEGIN INCLUDE */
 #include "uart_comms.h"
-
+#include "usb_events.h"
 
 /* USER CODE END INCLUDE */
 
@@ -103,6 +103,7 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
+volatile uint8_t vcp_port_is_open = 0;
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -238,7 +239,26 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
     break;
 
     case CDC_SET_CONTROL_LINE_STATE:
+    {
+      uint16_t wValue = hUsbDeviceFS.request.wValue;
 
+      if (wValue & 0x01)
+      {
+        if(!vcp_port_is_open)
+        {
+          usb_notify(USB_EVENT_PORT_OPEN);
+        }
+        vcp_port_is_open = 1; // Application connected
+      }
+      else
+      {
+        if(vcp_port_is_open)
+        {
+          usb_notify(USB_EVENT_PORT_CLOSE);
+        }
+        vcp_port_is_open = 0; // Application disconnected/closed port
+      }
+    }
     break;
 
     case CDC_SEND_BREAK:
@@ -318,7 +338,7 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 {
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
-  USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+  const USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }

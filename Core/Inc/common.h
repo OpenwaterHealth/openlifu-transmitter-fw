@@ -83,11 +83,21 @@ typedef enum {
 	OW_CMD_GET_AMBIENT = 0x07,
 	OW_CMD_ASYNC = 0x09,
 	OW_CMD_USR_CFG = 0x0A,
+	OW_CMD_CLEAR_CONFIG = 0x0B,  // Phase 2: broadcast down the chain; each node drops its
+	                             // assigned I2C address + configured state and relays onward.
 	OW_CMD_DISCOVERY = 0x0C,
 	OW_CMD_DFU = 0x0D,
 	OW_CMD_NOP = 0x0E,
 	OW_CMD_RESET = 0x0F,
 } UstxGlobalCommands;
+
+// Node operating mode reported in the OW_CMD_DISCOVERY response payload (data[0]).
+// A node that answers discovery with no payload (legacy firmware) is treated as APP.
+typedef enum {
+	NODE_MODE_UNKNOWN    = 0x00,
+	NODE_MODE_APP        = 0x01,  // running application firmware
+	NODE_MODE_BOOTLOADER = 0x02,  // stuck in / waiting in the secure bootloader (I2C DFU)
+} NodeMode;
 
 typedef enum {
 	OW_CTRL_SCAN_I2C = 0x10,
@@ -101,6 +111,14 @@ typedef enum {
 	OW_CTRL_SET_HV = 0x18,
 	OW_CTRL_GET_HV = 0x19,
 	OW_CTRL_GET_MODULE_COUNT = 0x1A,
+	OW_CTRL_GET_MODULE_MODE  = 0x1B,  // Phase 2: return a module's NodeMode (app vs bootloader)
+	OW_CTRL_ENUMERATE        = 0x1C,  // Phase 2: re-run clear-config + discovery walk on demand
+	OW_CTRL_SET_DELAY_PROFILE = 0x1D,
+	OW_CTRL_GET_DELAY_PROFILE = 0x1E,
+	OW_CTRL_SET_PROFILE_CYCLE = 0x1F,
+	OW_CTRL_SET_PATTERN_PROFILE = 0x28,  // 0x28 and 0x29 skip the UstxTX7332Commands block since we're out of hex values
+	OW_CTRL_GET_PATTERN_PROFILE = 0x29,
+	OW_CTRL_ARM_PROFILE_CYCLE = 0x2A,    // master -> slave(s) only, cycle profiles off the shared trigger line
 } UstxControllerCommands;
 
 typedef enum {

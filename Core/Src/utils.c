@@ -100,3 +100,17 @@ void printBuffer(const uint8_t* buffer, uint32_t size) {
 
     printf("\r\n");
 }
+
+void delay_us(uint32_t us) {
+    // Calculate cycles per microsecond
+    uint32_t cycles_per_us = SystemCoreClock / 1000000;
+    
+    // Multiply by requested microseconds.
+    // We divide by a constant factor (typically 3 to 5) representing 
+    // the approximate number of CPU clock cycles per loop iteration.
+    volatile uint32_t count = (us * cycles_per_us) / 4; 
+    
+    while (count--) {
+        __NOP(); // Assembly "No Operation" to prevent optimization
+    }
+}

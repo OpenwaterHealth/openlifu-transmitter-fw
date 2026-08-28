@@ -27,6 +27,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "main.h"
+#include "usb_events.h"
 #include "uart_comms.h"
 #include "module_manager.h"
 
@@ -46,6 +47,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN 0 */
 extern volatile bool _usb_interrupt_flag;
+volatile uint8_t usb_connected = 0;
 
 /* USER CODE END 0 */
 
@@ -199,6 +201,11 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
 
   /* Reset Device. */
   USBD_LL_Reset((USBD_HandleTypeDef*)hpcd->pData);
+  // Host detected us (cable plugged in, enumeration starting)
+  if(!usb_connected){
+    usb_notify(USB_EVENT_CONNECT);
+  }
+  usb_connected = 1;
 }
 
 /**
@@ -217,6 +224,11 @@ void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *hpcd)
   USBD_LL_Suspend((USBD_HandleTypeDef*)hpcd->pData);
   /* Enter in STOP mode. */
   /* USER CODE BEGIN 2 */
+  if(usb_connected){
+    usb_notify(USB_EVENT_DISCONNECT);
+  }
+  usb_connected = 0;
+  
   if(get_device_role() == ROLE_MASTER)
   {
 	  set_device_role(ROLE_SLAVE);
@@ -246,6 +258,11 @@ void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *hpcd)
 {
 
   /* USER CODE BEGIN 3 */
+  if(!usb_connected){
+    usb_notify(USB_EVENT_CONNECT);
+  }
+  usb_connected = 1;
+
   if(get_device_role() != ROLE_MASTER)
   {
 	  set_device_role(ROLE_MASTER);

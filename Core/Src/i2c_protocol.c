@@ -67,7 +67,6 @@ size_t i2c_packet_toBuffer(I2C_TX_Packet* pTX, uint8_t* buffer) {
         return 0;
     }
 
-    int i = 0;
     uint8_t* pBuff = buffer;
 
     pTX->crc = 0xFFFF;
@@ -102,7 +101,7 @@ size_t i2c_packet_toBuffer(I2C_TX_Packet* pTX, uint8_t* buffer) {
 
     // Write Data
     if (pTX->pData) {
-        for (i = 0; i < pTX->data_len; i++) {
+        for (int i = 0; i < pTX->data_len; i++) {
             *buffer = pTX->pData[i];
             buffer++;
         }

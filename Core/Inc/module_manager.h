@@ -21,6 +21,7 @@ extern "C" {
 typedef struct {
     uint8_t i2c_address;          // I2C address (for master, this may be unused or fixed)
     uint8_t num_transmitters;     // Number of transmitters (typically TX_PER_MODULE)
+    uint8_t mode;                 // NodeMode: app vs bootloader (from discovery response)
     TX7332 transmitters[TX_PER_MODULE];
 } ModuleInfo;
 
@@ -67,7 +68,13 @@ int ModuleManager_RegisterMaster(uint8_t i2c_address);
  * @param  i2c_address I2C address of the slave module.
  * @return int The index of the newly added module on success, or negative value on error.
  */
-int ModuleManager_AddSlave(uint8_t i2c_address);
+int ModuleManager_AddSlave(uint8_t i2c_address, uint8_t mode);
+
+/**
+ * @brief  Returns the stored NodeMode (app vs bootloader) for a module index,
+ *         or NODE_MODE_UNKNOWN if the index is out of range.
+ */
+uint8_t ModuleManager_GetModuleMode(uint8_t moduleIndex);
 
 /**
  * @brief  Gets a pointer to a registered module by its index.

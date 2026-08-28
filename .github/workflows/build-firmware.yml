@@ -1,7 +1,12 @@
 name: Build firmware using published build image
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bl_release:
+        description: "open-lifu-transmitter-bl release tag to bundle into the production image (default: latest)"
+        required: false
+        default: "latest"
   push:
     branches: [ "main", "next" ]
     tags:
@@ -9,7 +14,27 @@ on:
       - "*.*.*-rc.*"
 
 permissions:
-  contents: write 
+  contents: write
+
+# ---------------------------------------------------------------------------
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#
+#   FW_SIGNING_KEY     ECDSA P-256 *private* signing key, full PEM (multi-line).
+#                      MUST be the private half of the public key embedded in the
+#                      open-lifu-transmitter-bl bootloader (SECoreBin). Used to
+#                      sign the slot image so the bootloader will accept it.
+#                      NEVER commit it.
+#
+#   SECOREBIN_AES_KEY  AES-128 key as base64 of the raw 16 bytes. Same value as
+#                      the open-lifu-transmitter-bl secret of the same name. The
+#                      CBC crypto scheme's sign step requires it (the SDK signer
+#                      reads it as aes128.bin in the --keys directory).
+#
+# All repos involved are public, so the openlifu-sdk (signer) install and the
+# bootloader-release download use the default GITHUB_TOKEN — no extra PAT is
+# needed. Reuse the SAME keypair as open-lifu-transmitter-bl: a new keypair
+# would require re-keying and rebuilding the bootloader.
+# ---------------------------------------------------------------------------
 
 jobs:
   build:
@@ -22,30 +47,289 @@ jobs:
           fetch-depth: 0        # full history so git-describe works
           fetch-tags: true       # ensure all tags are present
 
+      # Fail fast (before the minutes-long builds) with a clear message if either
+      # signing secret is missing.
+      - name: Check required secrets
+        env:
+          FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
+          SECOREBIN_AES_KEY: ${{ secrets.SECOREBIN_AES_KEY }}
+        run: |
+          missing=0
+          for v in FW_SIGNING_KEY SECOREBIN_AES_KEY; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Required secret '$v' is not set. Add it under" \
+                   "Settings -> Secrets and variables -> Actions." >&2
+              missing=1
+            fi
+          done
+          [ "$missing" = "0" ] || exit 1
+          echo "All required secrets present."
+
       # ---------------------------
-      # Build Firmware
+      # FwVersion is a uint16 consumed by the bootloader's anti-rollback check.
+      # The encoding is owned by the SDK signer (openlifu_sdk.io.LIFUCrypto):
+      # a 16-bit bitfield major[15:11].minor[10:5].patch[4:0] (major 0-31,
+      # minor 0-63, patch 0-31), monotonic with semver. We pass the release
+      # tag (a semver string; -rc suffixes are dropped) and the signer encodes
+      # it. Non-release builds sign as 0.0.1.
+      # WARNING: a unit that has installed version N rejects any image < N.
+      # Keep release versions monotonic. NOTE: this is a DIFFERENT encoding
+      # from the legacy decimal MMmmpp (1.2.6 was 10206, is now 2118) - units
+      # with a floor latched under the old scheme must have it reset before
+      # accepting new-scheme images.
       # ---------------------------
+      - name: Resolve signing version string
+        id: fwver
+        run: |
+          # Tag build -> that tag. Branch builds derive the version from the
+          # newest matching tag so the image is installable on units at that
+          # anti-rollback floor (instead of always signing as 0.0.1):
+          #   next -> latest PRE-RELEASE (X.Y.Z-rc.N)
+          #   main -> latest RELEASE     (X.Y.Z)
+          # git tag needs full history/tags (fetch-depth: 0, fetch-tags: true).
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSTR="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_REF_NAME}" == "next" ]]; then
+            VERSTR=$(git tag --sort=-creatordate \
+                     | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true)
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            VERSTR=$(git tag --sort=-creatordate \
+                     | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          fi
+          # Fallback when no matching tag exists yet.
+          VERSTR="${VERSTR:-0.0.1}"
+          echo "verstr=$VERSTR" >> "$GITHUB_OUTPUT"
+          echo "Signing version (semver): $VERSTR (ref ${GITHUB_REF_NAME})"
+
       - name: Pull build image
-        run: docker pull ghcr.io/openwaterhealth/stm32-build-env:latest 
-      - name: Build inside container
+        run: docker pull ghcr.io/openwaterhealth/stm32-build-env:latest
+
+      # Slot image: runs under the secure bootloader from the active slot
+      # (linked at 0x08010400). This is the image that gets signed.
+      - name: Build slot image (@0x08010400)
         run: |
           docker run --rm \
             -v "$GITHUB_WORKSPACE":/workspace \
             -w /workspace \
-            --workdir /workspace \
             ghcr.io/openwaterhealth/stm32-build-env:latest \
-            bash -lc "git config --global --add safe.directory /workspace && cmake --preset Debug && cmake --build build/Debug --config Debug --target all -j 10"
+            bash -lc "git config --global --add safe.directory /workspace && cmake --preset Release && cmake --build build/Release --config Release --target all -j 10"
+
+      # Bare-metal image: standalone at 0x08000000, no bootloader (BARE_METAL=ON).
+      - name: Build bare-metal image (@0x08000000)
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            ghcr.io/openwaterhealth/stm32-build-env:latest \
+            bash -lc "git config --global --add safe.directory /workspace && cmake --preset Release-BareMetal && cmake --build build/Release-BareMetal --config Release --target all -j 10"
 
       # ---------------------------
-      # Upload Firmware
+      # Resolve which open-lifu-transmitter-bl release to bundle. Uses the
+      # workflow_dispatch input when given. Otherwise:
+      #   pre-release build (rc tag or next branch) -> the latest PRE-RELEASE
+      #     bootloader, but only if it is semver-NEWER than the latest stable
+      #     release (a stable X.Y.Z supersedes its own X.Y.Z-rc.N); otherwise
+      #     fall back to the latest stable release.
+      #   release build (release tag or main)       -> latest stable release.
       # ---------------------------
-      - name: Upload firmware artifact
+      - name: Resolve open-lifu-transmitter-bl release tag
+        id: bl
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REQ="${{ github.event.inputs.bl_release }}"
+          if [ -n "$REQ" ] && [ "$REQ" != "latest" ]; then
+            TAG="$REQ"
+          else
+            REL=$(gh release list --repo OpenwaterHealth/open-lifu-transmitter-bl \
+                  --json tagName,isPrerelease \
+                  --jq 'map(select(.isPrerelease | not)) | .[0].tagName // empty')
+            PRE=$(gh release list --repo OpenwaterHealth/open-lifu-transmitter-bl \
+                  --json tagName,isPrerelease \
+                  --jq 'map(select(.isPrerelease)) | .[0].tagName // empty')
+            TAG="$REL"
+            if [[ "${GITHUB_REF_NAME}" == "next" || "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]]; then
+              # semver compare: '-rc.' -> '~rc.' makes sort -V rank a
+              # pre-release below its own stable release but above older ones.
+              if [ -n "$PRE" ] && { [ -z "$REL" ] || \
+                   [ "$(printf '%s\n' "${PRE/-rc./~rc.}" "$REL" | sort -V | tail -n1)" = "${PRE/-rc./~rc.}" ]; }; then
+                TAG="$PRE"
+              fi
+            fi
+            if [ -z "$TAG" ]; then
+              echo "::error::No open-lifu-transmitter-bl release found to bundle." >&2
+              exit 1
+            fi
+            echo "Bootloader candidates: stable='${REL:-none}' pre-release='${PRE:-none}'"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Bundling open-lifu-transmitter-bl @ $TAG (ref ${GITHUB_REF_NAME})"
+
+      # The signer is the SDK's LIFUCrypto — the single source of truth for the
+      # image format and the FwVersion encoding. Install the SDK from the
+      # build-type-appropriate published release (same rule as the bootloader):
+      #   pre-release build (rc tag or next branch) -> latest PRE-RELEASE
+      #     openlifu-sdk, but only if it is semver-newer than the latest stable
+      #     release; otherwise the latest stable release.
+      #   release build (release tag or main)       -> latest stable release.
+      # (The bootloader that verifies the image is bundled separately; the SDK
+      # only owns the signing format.)
+      - name: Resolve openlifu-sdk (signer) release
+        id: sdk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REL=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
+                --json tagName,isPrerelease \
+                --jq 'map(select(.isPrerelease | not)) | .[0].tagName // empty')
+          PRE=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
+                --json tagName,isPrerelease \
+                --jq 'map(select(.isPrerelease)) | .[0].tagName // empty')
+          TAG="$REL"
+          KIND="release"
+          if [[ "${GITHUB_REF_NAME}" == "next" || "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]]; then
+            # semver compare: '-rc.' -> '~rc.' makes sort -V rank a pre-release
+            # below its own stable release but above older ones.
+            if [ -n "$PRE" ] && { [ -z "$REL" ] || \
+                 [ "$(printf '%s\n' "${PRE/-rc./~rc.}" "$REL" | sort -V | tail -n1)" = "${PRE/-rc./~rc.}" ]; }; then
+              TAG="$PRE"
+              KIND="pre-release"
+            fi
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::No openlifu-sdk release found to install." >&2
+            exit 1
+          fi
+          echo "SDK candidates: stable='${REL:-none}' pre-release='${PRE:-none}'"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo "Resolved openlifu-sdk $KIND @ $TAG (ref ${GITHUB_REF_NAME})"
+
+      - name: Install openlifu-sdk (signer)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet \
+            "openlifu-sdk[crypto] @ git+https://github.com/OpenwaterHealth/openlifu-sdk@${{ steps.sdk.outputs.tag }}"
+          # Confirm the signer module imports (also validates the deps).
+          python3 -c "import openlifu_sdk.io.LIFUCrypto as m; print('signer:', m.__file__)"
+
+      - name: Download bootloader binary from open-lifu-transmitter-bl release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p _artifacts
+          gh release download "${{ steps.bl.outputs.tag }}" \
+            --repo OpenwaterHealth/open-lifu-transmitter-bl \
+            --pattern 'open-lifu-transmitter-bl.bin' \
+            --dir _artifacts --clobber
+          test -s _artifacts/open-lifu-transmitter-bl.bin
+
+      # ---------------------------
+      # Sign the slot image with the ECDSA private key (+ AES key) from secrets.
+      # Keys are materialised only into a tmp dir and removed after use; they are
+      # never written into the repo tree.
+      # ---------------------------
+      - name: Sign the slot image
+        id: sign
+        env:
+          FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
+          SECOREBIN_AES_KEY: ${{ secrets.SECOREBIN_AES_KEY }}
+        run: |
+          set -euo pipefail
+          KD="$(mktemp -d)"
+          trap 'rm -rf "$KD"' EXIT
+          printf '%s\n' "$FW_SIGNING_KEY" > "$KD/ecdsa_private.pem"
+          printf '%s' "$SECOREBIN_AES_KEY" | base64 -d > "$KD/aes128.bin"
+          if [ "$(wc -c < "$KD/aes128.bin")" -ne 16 ]; then
+            echo "::error::Decoded AES key is not 16 bytes — check SECOREBIN_AES_KEY." >&2
+            exit 1
+          fi
+          APP="build/Release/lifu-transmitter-fw.bin"
+          test -s "$APP"
+          # Sign with the installed SDK (openlifu-sdk[crypto], resolved above);
+          # --keys is the tmp dir holding the materialised ecdsa_private.pem +
+          # aes128.bin.
+          python3 -m openlifu_sdk.io.LIFUCrypto sign \
+            --keys "$KD" \
+            --firmware "$APP" \
+            --version "${{ steps.fwver.outputs.verstr }}" \
+            --output _artifacts/openlifu-transmitter-fw-signed.bin \
+            | tee _sign.out
+          test -s _artifacts/openlifu-transmitter-fw-signed.bin
+          FWVER="$(sed -n 's/.*FW version *: *\([0-9]\+\).*/\1/p' _sign.out | head -n1)"
+          echo "fwversion=$FWVER" >> "$GITHUB_OUTPUT"
+          echo "Signed slot image (semver=${{ steps.fwver.outputs.verstr }}, FwVersion=$FWVER)"
+
+      # ---------------------------
+      # Production image = bootloader (@0x08000000) + signed app (@0x08010000),
+      # merged into a single flashable image for factory programming.
+      # ---------------------------
+      - name: Assemble production image (bootloader + signed app)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          BL  = "_artifacts/open-lifu-transmitter-bl.bin"
+          APP = "_artifacts/openlifu-transmitter-fw-signed.bin"
+          OUT = "_artifacts/openlifu-transmitter-fw-production.bin"
+          SLOT_OFFSET = 0x08010000 - 0x08000000   # 0x10000 (bootloader occupies the first 64 KB)
+          bl  = open(BL, "rb").read()
+          app = open(APP, "rb").read()
+          if len(bl) > SLOT_OFFSET:
+              raise SystemExit(f"bootloader ({len(bl)} B) overlaps app slot at 0x{SLOT_OFFSET:x}")
+          img = bytearray(b"\xff" * SLOT_OFFSET)
+          img[:len(bl)] = bl
+          img += app
+          with open(OUT, "wb") as f:
+              f.write(img)
+          print(f"production image: {len(img)} bytes (bootloader={len(bl)} B, signed app={len(app)} B)")
+          PY
+          # Intel-HEX view of the same image at load base 0x08000000
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            ghcr.io/openwaterhealth/stm32-build-env:latest \
+            bash -lc "arm-none-eabi-objcopy -I binary -O ihex --change-addresses=0x08000000 _artifacts/openlifu-transmitter-fw-production.bin _artifacts/openlifu-transmitter-fw-production.hex"
+          test -s _artifacts/openlifu-transmitter-fw-production.hex
+
+      # Collect the bare-metal image with an unambiguous name (both preset builds
+      # otherwise emit the same lifu-transmitter-fw.* basename).
+      - name: Collect bare-metal artifact
+        run: |
+          set -euo pipefail
+          cp "build/Release-BareMetal/lifu-transmitter-fw.bin" _artifacts/openlifu-transmitter-fw-baremetal.bin
+          cp "build/Release-BareMetal/lifu-transmitter-fw.hex" _artifacts/openlifu-transmitter-fw-baremetal.hex
+
+      # Upload as three separate, clearly-named artifacts:
+      #   - baremetal  : standalone app @0x08000000 (no bootloader)
+      #   - signed     : app @0x08010400 signed for the bootloader slot
+      #   - production : bootloader + signed app, single factory image
+      - name: Upload bare-metal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lifu-transmitter-fw
+          name: openlifu-transmitter-fw-baremetal
+          if-no-files-found: error
           path: |
-            build/Debug/*.hex
-            build/Debug/*.bin
+            _artifacts/openlifu-transmitter-fw-baremetal.bin
+            _artifacts/openlifu-transmitter-fw-baremetal.hex
+
+      - name: Upload signed slot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openlifu-transmitter-fw-signed
+          if-no-files-found: error
+          path: _artifacts/openlifu-transmitter-fw-signed.bin
+
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openlifu-transmitter-fw-production
+          if-no-files-found: error
+          path: |
+            _artifacts/openlifu-transmitter-fw-production.bin
+            _artifacts/openlifu-transmitter-fw-production.hex
 
       # ---------------------------
       # Create GitHub Release (tags only)
@@ -55,7 +339,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
-
           if [[ "$TAG_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           elif [[ "$TAG_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -64,12 +347,12 @@ jobs:
             echo "Unrecognized tag format: $TAG_NAME" >&2
             exit 1
           fi
-          
+
       - name: Capture build metadata
         id: buildmeta
         run: |
-          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         if: startsWith(github.ref, 'refs/tags/')
@@ -81,28 +364,35 @@ jobs:
             echo "" >> notes.md
           fi
 
-          PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p')
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${GITHUB_REF_NAME}$" | head -n 1)
 
           if [ -z "$PREV_TAG" ]; then
             git log --pretty=format:"- %s" >> notes.md
           else
-            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" >> notes.md
+            git log "$PREV_TAG"..HEAD --pretty=format:"- %s" >> notes.md
           fi
 
+          echo "" >> notes.md
           echo "" >> notes.md
           echo "---" >> notes.md
           echo "**Build SHA:** \`${{ steps.buildmeta.outputs.sha }}\`" >> notes.md
           echo "**Build Time:** ${{ steps.buildmeta.outputs.datetime }}" >> notes.md
+          echo "**Bundled bootloader:** \`${{ steps.bl.outputs.tag }}\`" >> notes.md
+          echo "**Signer (openlifu-sdk):** \`${{ steps.sdk.outputs.tag }}\`" >> notes.md
+          echo "**Signed version:** \`${{ steps.fwver.outputs.verstr }}\` (FwVersion \`${{ steps.sign.outputs.fwversion }}\`, bitfield)" >> notes.md
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ steps.reltype.outputs.prerelease }}
-          allow_updates: ${{ steps.reltype.outputs.prerelease }}
-          replace_existing_artifacts: ${{ steps.reltype.outputs.prerelease }}
+          tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          prerelease: ${{ steps.reltype.outputs.prerelease }}
           body_path: notes.md
+          make_latest: ${{ steps.reltype.outputs.prerelease == 'false' }}
           files: |
-            build/Debug/*.hex
-            build/Debug/*.bin
+            _artifacts/openlifu-transmitter-fw-baremetal.bin
+            _artifacts/openlifu-transmitter-fw-baremetal.hex
+            _artifacts/openlifu-transmitter-fw-signed.bin
+            _artifacts/openlifu-transmitter-fw-production.bin
+            _artifacts/openlifu-transmitter-fw-production.hex
