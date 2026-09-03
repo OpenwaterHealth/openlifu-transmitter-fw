@@ -47,6 +47,28 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "BARE_METAL": "ON"
             }
+        },
+        {
+            "name": "Debug-FDA",
+            "inherits": "default",
+            "displayName": "Debug (FDA mode)",
+            "description": "Debug FDA build: presets baked in, firmware programs the TX7332 chips and host register writes are refused. Bare metal because the full preset set does not fit the 187K bootloader slot. Override the set with -DFDA_MODE=vet-watertank.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BARE_METAL": "ON",
+                "FDA_MODE": "vet"
+            }
+        },
+        {
+            "name": "Release-FDA",
+            "inherits": "default",
+            "displayName": "Release (FDA mode)",
+            "description": "Release FDA build: presets baked in, firmware programs the TX7332 chips and host register writes are refused. Bare metal because the full preset set does not fit the 187K bootloader slot. Override the set with -DFDA_MODE=vet-watertank.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BARE_METAL": "ON",
+                "FDA_MODE": "vet"
+            }
         }
     ],
     "buildPresets": [
@@ -65,6 +87,14 @@
         {
             "name": "Release-BareMetal",
             "configurePreset": "Release-BareMetal"
+        },
+        {
+            "name": "Debug-FDA",
+            "configurePreset": "Debug-FDA"
+        },
+        {
+            "name": "Release-FDA",
+            "configurePreset": "Release-FDA"
         }
     ]
 }

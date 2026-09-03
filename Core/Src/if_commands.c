@@ -18,6 +18,7 @@
 #include "demo.h"
 #include "thermistor.h"
 #include "lifu_config.h"
+#include "presets.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -79,14 +80,14 @@ static bool IsValidProfile(uint8_t profile)
 	return (profile >= 1U) && (profile <= MAX_PROFILES);
 }
 
-static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_addr, uint8_t reg_count)
+static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_addr, uint16_t reg_count)
 {
 	if (tx_idx >= TX_PER_MODULE || reg_count == 0U) {
 		return;
 	}
 
 	TxProfileCache *cache = &tx_profile_cache[tx_idx];
-	for (uint16_t i = 0; i < (uint16_t)reg_count; i++) {
+	for (uint16_t i = 0; i < reg_count; i++) {
 		uint16_t addr = (uint16_t)(start_addr + i);
 
 		if (addr >= TX7332_DELAY_DATA_START && addr <= TX7332_DELAY_DATA_END) {
@@ -104,6 +105,35 @@ static void cache_profiles_from_register_range(uint8_t tx_idx, uint16_t start_ad
 
 	cache->delay_profile_count = __builtin_popcount(cache->delay_profiles_mask);
 	cache->pattern_profile_count = __builtin_popcount(cache->pattern_profiles_mask);
+}
+
+// FDA mode: presets.c owns the register writes, so it reports the blocks it
+// pushed rather than leaving the profile masks empty.
+void profile_cache_note_write(uint8_t tx_idx, uint16_t start_addr, uint16_t reg_count)
+{
+	cache_profiles_from_register_range(tx_idx, start_addr, reg_count);
+}
+
+// FDA mode: same execution-order state OW_CTRL_SET_PROFILE_CYCLE fills in, but
+// from a table baked into the image.
+bool profile_cycle_install(uint8_t profile_count, const uint8_t *order, uint8_t len)
+{
+	if (order == NULL || profile_count < 1U || profile_count > MAX_PROFILES) return false;
+	if (len < 1U || len > MAX_EXECUTION_ORDER) return false;
+	if (auto_cycle_is_active()) return false;
+
+	for (uint8_t i = 0; i < len; i++) {
+		if (order[i] < 1U || order[i] > profile_count) return false;
+	}
+
+	profile_cycle.profile_count = profile_count;
+	profile_cycle.exec_order_len = len;
+	profile_cycle.current_exec_index = 0;
+	for (uint8_t i = 0; i < len; i++) {
+		profile_cycle.execution_order[i] = order[i];
+	}
+	profile_cycle.is_configured = true;
+	return true;
 }
 
 // Return the next 1-based profile index from execution_order, advancing
@@ -549,6 +579,78 @@ static bool set_slave_profile_cycles(bool arm)
 	}
 
 	return true;
+}
+
+// Reply header preceding the JSON slice, little-endian (see presets/README.md):
+//   [0]     preset count baked into this image
+//   [1]     index of this preset
+//   [2..3]  total json length
+//   [4..5]  offset of this slice
+//   [6]     id length, id string follows
+#define PRESET_REPLY_FIXED 7U
+#define PRESET_REPLY_MAX (PRESET_REPLY_FIXED + PRESET_ID_MAX + PRESET_CHUNK_MAX)
+_Static_assert(PRESET_REPLY_MAX <= DATA_MAX_SIZE,
+               "preset reply exceeds the protocol payload limit; lower PRESET_CHUNK_MAX");
+
+// Serves the preset JSON baked into flash by tools/gen_presets.py. Nothing here
+// interprets the contents: the host reads the bytes back verbatim and derives
+// the TX7332 register writes itself.
+//
+// One command returns the whole document, but not in one packet -- a response
+// caps at DATA_MAX_SIZE and a rastered preset is ~21 KB. Each reply therefore
+// carries a slice plus everything needed to ask for the next one, so the host
+// repeats the same command with an advancing offset until it has json_len
+// bytes. A request at exactly json_len answers with an empty slice rather than
+// an error, so reading until empty is safe.
+static void preset_command(UartPacket *uartResp, const UartPacket *cmd)
+{
+	// Backs the reply payload until comms_interface_send() copies it out.
+	static uint8_t reply[PRESET_REPLY_MAX];
+
+	const PresetEntry *entry = presets_get(cmd->reserved);
+	const uint8_t *chunk = NULL;
+	uint16_t offset;
+	uint16_t chunk_len;
+	size_t id_len;
+
+	uartResp->command = cmd->command;
+	uartResp->addr = cmd->addr;
+	uartResp->reserved = cmd->reserved;
+	uartResp->data_len = 0;
+
+	if (entry == NULL || cmd->data == NULL || cmd->data_len < 2U) {
+		uartResp->packet_type = OW_ERROR;
+		return;
+	}
+
+	offset = (uint16_t)cmd->data[0] | ((uint16_t)cmd->data[1] << 8);
+	if (offset > entry->json_len) {
+		uartResp->packet_type = OW_ERROR;
+		return;
+	}
+
+	id_len = strlen(entry->id);
+	if (id_len > PRESET_ID_MAX) {
+		uartResp->packet_type = OW_ERROR;
+		return;
+	}
+
+	chunk_len = presets_read(cmd->reserved, offset, &chunk);
+
+	reply[0] = presets_count();
+	reply[1] = cmd->reserved;
+	reply[2] = (uint8_t)(entry->json_len & 0xFFU);
+	reply[3] = (uint8_t)(entry->json_len >> 8);
+	reply[4] = (uint8_t)(offset & 0xFFU);
+	reply[5] = (uint8_t)(offset >> 8);
+	reply[6] = (uint8_t)id_len;
+	memcpy(&reply[PRESET_REPLY_FIXED], entry->id, id_len);
+	if (chunk_len > 0U) {
+		memcpy(&reply[PRESET_REPLY_FIXED + id_len], chunk, chunk_len);
+	}
+
+	uartResp->data_len = (uint16_t)(PRESET_REPLY_FIXED + id_len + chunk_len);
+	uartResp->data = reply;
 }
 
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
@@ -1065,6 +1167,13 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 
+			// In FDA mode the execution order comes from the loaded preset.
+			if (presets_fda_mode()) {
+				uartResp->reserved = OW_INVALID_PACKET;
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+
 			// Every module keeps its own copy of the execution order and apodizations,
 			// so the host configures each slave.
 			if (module_id == 0x00) {
@@ -1165,6 +1274,30 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			reset_profile_cycle_to_start();
 			break;
 		}
+		case OW_PRESET_GET:
+			// The JSON lives in this module's flash, so this is never forwarded.
+			if (module_id != 0) {
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+			preset_command(uartResp, cmd);
+			break;
+		case OW_PRESET_LOAD:
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			if (module_id == 0x00) {
+				// Each module programs its own TX7332 chips from its own copy
+				// of the preset, so slaves get the same command forwarded.
+				if (!presets_load(cmd->reserved)) {
+					uartResp->packet_type = OW_ERROR;
+					return;
+				}
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
+			}
+			break;
 		default:
 			uartResp->addr = 0;
 			uartResp->reserved = OW_INVALID_PACKET;
@@ -1185,6 +1318,28 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 
 	uartResp->id = cmd->id;
 	uartResp->command = cmd->command;
+
+	// In FDA mode the image owns the TX7332 configuration: it is programmed
+	// from a baked preset via OW_PRESET_LOAD, so the host may read the chips
+	// but not write them. Reads stay open for verification and diagnostics.
+	if (presets_fda_mode()) {
+		switch (cmd->command)
+		{
+		case OW_TX7332_WREG:
+		case OW_TX7332_WBLOCK:
+		case OW_TX7332_VWREG:
+		case OW_TX7332_VWBLOCK:
+		case OW_TX7332_RESET:
+		case OW_TX7332_DEMO:
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = OW_INVALID_PACKET;
+			uartResp->data_len = 0;
+			uartResp->packet_type = OW_ERROR;
+			return;
+		default:
+			break;
+		}
+	}
 
 	switch (cmd->command)
 	{

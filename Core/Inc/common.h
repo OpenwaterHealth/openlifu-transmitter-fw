@@ -140,6 +140,19 @@ typedef enum {
 	OW_AFE_ENUM_TX7332 = 0x31,
 } UstxAfeCommands;
 
+// Baked-in operator presets (see presets.h). Master module only: the JSON is in
+// the master's flash, so this is never forwarded to a slave. Command bytes are
+// unique across every packet type (the SDK keeps one command -> packet-type
+// map), so this sits at 0x50, clear of the power board's 0x30-0x43 block.
+//
+// One command returns a preset's JSON. A response caps at DATA_MAX_SIZE while a
+// preset runs to ~12 KB, so the host repeats it with an advancing offset; every
+// reply carries the count, total length and id needed to drive that loop.
+typedef enum {
+	OW_PRESET_GET = 0x50,   // reserved=index, data=uint16 offset (LE) -> json slice
+	OW_PRESET_LOAD = 0x51,  // reserved=index -> program this module's TX7332 chips
+} UstxPresetCommands;
+
 typedef struct  {
 	uint16_t id;
 	uint8_t packet_type;

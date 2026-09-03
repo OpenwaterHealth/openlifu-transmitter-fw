@@ -58,7 +58,7 @@ void TX7332_WriteReg(TX7332* device, uint16_t addr, uint32_t val);
 bool TX7332_WriteVerify(TX7332* device, uint16_t addr, uint32_t val);
 uint32_t TX7332_ReadReg(TX7332* device, uint16_t addr);
 
-bool TX7332_WriteBulk(TX7332* device, uint16_t addr, uint32_t* pInts, int len);
+bool TX7332_WriteBulk(TX7332* device, uint16_t addr, const uint32_t* pInts, int len);
 bool TX7332_WriteBulkVerify(TX7332* device, uint16_t addr, uint32_t* be_bytes, int len);
 
 void TX7332_SetRepeat(TX7332* device, int count);
