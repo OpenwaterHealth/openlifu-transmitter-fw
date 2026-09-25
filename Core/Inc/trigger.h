@@ -70,6 +70,10 @@ uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
+bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
+                        uint32_t pulse_count, uint32_t train_interval_us,
+                        uint32_t train_count, uint32_t mode);
+uint32_t get_trigger_train_count(void);
 uint8_t get_trigger_mode(void);
 const char* get_trigger_mode_str(void);
 

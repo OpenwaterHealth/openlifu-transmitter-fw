@@ -314,6 +314,39 @@ bool get_trigger_data(char *jsonString, size_t max_length)
 	 return true;
 }
 
+// How many pulse trains the current config will run. Preset loading preserves
+// this across a reconfigure, since run length is the host's call, not the
+// preset's.
+uint32_t get_trigger_train_count(void)
+{
+	return _timerDataConfig.TriggerPulseTrainCount;
+}
+
+// Apply a trigger configuration directly, without going through the JSON that
+// the host would normally send. FDA mode uses this: the timing belongs to the
+// baked preset, so loading one configures the sequence as well as the chips.
+bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
+                        uint32_t pulse_count, uint32_t train_interval_us,
+                        uint32_t train_count, uint32_t mode)
+{
+	if (frequency_hz == 0U || pulse_count == 0U || train_count == 0U) return false;
+	if (pulse_width_us == 0U) return false;
+	if (mode > TRIGGER_MODE_SINGLE) return false;
+
+	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING) {
+		stop_trigger_pulse();
+	}
+
+	_timerDataConfig.TriggerFrequencyHz = frequency_hz;
+	_timerDataConfig.TriggerPulseWidthUsec = pulse_width_us;
+	_timerDataConfig.TriggerPulseCount = pulse_count;
+	_timerDataConfig.TriggerPulseTrainInterval = train_interval_us;
+	_timerDataConfig.TriggerPulseTrainCount = train_count;
+	_timerDataConfig.TriggerMode = mode;
+	_timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
+	return true;
+}
+
 bool set_trigger_data(const char *jsonString, size_t str_len)
 {
 	 uint8_t tempArr[255] = {0};
