@@ -66,6 +66,10 @@ typedef enum {
 
 typedef enum {
 	OW_SUCCESS = 0x00,
+	// FDA mode: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
+	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
+	OW_TEMP_TOO_HIGH = 0xFA,  // above the loaded preset's start_C
+	OW_NO_PRESET = 0xFB,      // nothing loaded with OW_PRESET_LOAD yet
 	OW_UNKNOWN_COMMAND = 0xFC,
 	OW_BAD_CRC = 0xFD,
 	OW_INVALID_PACKET = 0xFE,

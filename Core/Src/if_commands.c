@@ -579,6 +579,22 @@ static bool set_slave_profile_cycles(bool arm)
 	return true;
 }
 
+uint8_t stop_sequence(void)
+{
+	uint8_t status = stop_trigger_pulse();
+
+	if (auto_cycle_is_active()) {
+		auto_cycle_stop();
+	}
+
+	// Slaves self-disarm on the trigger gap, but do it explicitly so
+	// they cannot react to a stray edge before the next sequence.
+	if (profile_cycle.is_configured) {
+		(void)set_slave_profile_cycles(false);
+	}
+	return status;
+}
+
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 {
 	uint8_t module_id = 0;
@@ -700,7 +716,23 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			
+
+#ifdef FDA_MODE
+			// The loaded preset's start_C decides; checked before anything is
+			// armed, so a refusal leaves no state to unwind.
+			{
+				static char reason[64];
+				uint8_t refused = presets_start_check();
+				if (refused != OW_SUCCESS) {
+					uartResp->reserved = refused;
+					uartResp->data_len = presets_start_refusal(refused, reason, sizeof(reason));
+					uartResp->data = (uint8_t *)reason;
+					uartResp->packet_type = OW_ERROR;
+					break;
+				}
+			}
+#endif
+
 			// Check if auto-cycle should be enabled
 			if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
 				// Validate: pulse_count must be divisible by number of profiles
@@ -745,20 +777,9 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			if(stop_trigger_pulse() != TRIGGER_STATUS_READY)
+			if (stop_sequence() != TRIGGER_STATUS_READY)
 			{
 				uartResp->packet_type = OW_ERROR;
-			}
-			
-			// Stop auto-cycle if active
-			if (auto_cycle_is_active()) {
-				auto_cycle_stop();
-			}
-
-			// Slaves self-disarm on the trigger gap, but do it explicitly so
-			// they cannot react to a stray edge before the next sequence.
-			if (profile_cycle.is_configured) {
-				(void)set_slave_profile_cycles(false);
 			}
 			break;
 		case OW_CTRL_SET_SWTRIG:
@@ -1227,38 +1248,54 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		}
 #ifdef FDA_MODE
 		case OW_PRESET_GET: {
-			// Fixed-size reply out of this module's flash, so never forwarded:
+			// Bounded reply out of this module's own presets, so never forwarded:
 			//   [0] count [1] index [2] chips [3] profiles
 			//   [4..7] settings_crc  [8..11] regs_crc computed now  [12..15] regs_crc baked
-//   [16] id_len [17..] id   (all LE)
-			static uint8_t reply[17U + PRESET_ID_MAX];
-			const Preset *preset = presets_get(cmd->reserved);
+			//   [16] id_len [17..] id
+			//   [17+id_len] n, then n x u32 train counts to choose from
+			//   then i16 start_c_x10, i16 shutoff_c_x10                  (all LE)
+			static uint8_t reply[17U + PRESET_ID_MAX + 1U + 4U * PRESET_TRAIN_SEL_MAX + 4U];
+			Preset preset;
+			bool found = presets_get(cmd->reserved, &preset);
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			if (module_id != 0 || preset == NULL) {
+			if (module_id != 0 || !found) {
 				uartResp->reserved = OW_INVALID_PACKET;
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 			// Both the live CRC and the baked one go back, so the host can see a
 			// self-check failure rather than just be refused; LOAD still refuses.
-			uint32_t regs_crc = presets_regs_crc(preset);
-			size_t id_len = strlen(preset->id);
-			if (id_len > PRESET_ID_MAX) id_len = PRESET_ID_MAX;
+			uint32_t regs_crc = presets_regs_crc(&preset);
+			size_t id_len = preset.id_len;   // presets_get() keeps it within PRESET_ID_MAX
 			reply[0] = presets_count();
 			reply[1] = cmd->reserved;
-			reply[2] = preset->chip_count;
-			reply[3] = preset->profile_count;
+			reply[2] = preset.chip_count;
+			reply[3] = preset.profile_count;
 			for (int i = 0; i < 4; i++) {
-				reply[4 + i] = (uint8_t)(preset->settings_crc >> (8 * i));
+				reply[4 + i] = (uint8_t)(preset.settings_crc >> (8 * i));
 				reply[8 + i] = (uint8_t)(regs_crc >> (8 * i));
-				reply[12 + i] = (uint8_t)(preset->regs_crc >> (8 * i));
+				reply[12 + i] = (uint8_t)(preset.regs_crc >> (8 * i));
 			}
 			reply[16] = (uint8_t)id_len;
-			memcpy(&reply[17], preset->id, id_len);
-			uartResp->data_len = (uint16_t)(17U + id_len);
+			memcpy(&reply[17], preset.id, id_len);
+			uint8_t n_sel = preset.train_count_len;
+			if (n_sel > PRESET_TRAIN_SEL_MAX) n_sel = PRESET_TRAIN_SEL_MAX;
+			size_t pos = 17U + id_len;
+			reply[pos++] = n_sel;
+			for (uint8_t s = 0; s < n_sel; s++) {
+				uint32_t trains = presets_train_count(&preset, s);
+				for (int i = 0; i < 4; i++) {
+					reply[pos++] = (uint8_t)(trains >> (8 * i));
+				}
+			}
+			reply[pos++] = (uint8_t)((uint16_t)preset.start_c_x10);
+			reply[pos++] = (uint8_t)((uint16_t)preset.start_c_x10 >> 8);
+			reply[pos++] = (uint8_t)((uint16_t)preset.shutoff_c_x10);
+			reply[pos++] = (uint8_t)((uint16_t)preset.shutoff_c_x10 >> 8);
+			uartResp->data_len = (uint16_t)pos;
 			uartResp->data = reply;
 			break;
 		}
@@ -1267,7 +1304,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			// Payload: train_count u32 LE, then the regs_crc the host expects.
+			// Payload: duration index u32 LE -- which of the preset's baked
+			// pulse-train counts to run -- then the regs_crc the host expects.
 			// Run length rides here rather than needing SET_SWTRIG, which the
 			// host must not send in FDA mode; the CRC is what makes the load
 			// refuse a preset the host and image disagree about.
@@ -1277,20 +1315,20 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				return;
 			}
 			if (module_id == 0x00) {
-				uint32_t trains = 0U, crc = 0U;
+				uint32_t duration = 0U, crc = 0U;
 				for (int i = 0; i < 4; i++) {
-					trains |= (uint32_t)cmd->data[i] << (8 * i);
+					duration |= (uint32_t)cmd->data[i] << (8 * i);
 					crc |= (uint32_t)cmd->data[4 + i] << (8 * i);
 				}
-				const Preset *preset = presets_get(cmd->reserved);
-				if (preset != NULL && crc != presets_regs_crc(preset)) {
+				Preset preset;
+				if (presets_get(cmd->reserved, &preset) && crc != presets_regs_crc(&preset)) {
 					uartResp->reserved = OW_BAD_CRC;
 					uartResp->packet_type = OW_ERROR;
 					return;
 				}
 				// Each module programs its own TX7332 chips from its own copy
 				// of the preset, so slaves get the same command forwarded.
-				if (!presets_load(cmd->reserved, trains, crc)) {
+				if (!presets_load(cmd->reserved, duration, crc)) {
 					uartResp->packet_type = OW_ERROR;
 					return;
 				}

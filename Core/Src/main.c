@@ -33,6 +33,8 @@
 #include "trigger.h"
 #include "i2c_slave.h"
 #include "thermistor.h"
+#include "if_commands.h"
+#include "presets.h"
 
 #ifdef DEBUG_ENABLED
 #include "logging.h"
@@ -686,6 +688,8 @@ int main(void)
       if (!isnan(new_tx_temp) && (new_tx_temp > -50.0f) && (new_tx_temp < 150.0f))
       {
         tx_temperature = new_tx_temp;
+        tx_temperature_tick = current_time;
+        tx_temperature_valid = true;
       }
 
       /* Overheat detection with hysteresis */
@@ -695,9 +699,7 @@ int main(void)
         {
           tx_overheat_flag = true;
           if(get_trigger_status() == TRIGGER_STATUS_RUNNING) {
-            stop_trigger_pulse();
-            // send update
-            
+            (void)stop_sequence();
           }
         }
       }
@@ -708,6 +710,14 @@ int main(void)
           tx_overheat_flag = false;
         }
       }
+
+#ifdef FDA_MODE
+      // The loaded preset's shutoff_C, or a thermistor gone quiet, ends a run.
+      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
+      {
+        (void)stop_sequence();
+      }
+#endif
     }
   }
   /* USER CODE END 3 */

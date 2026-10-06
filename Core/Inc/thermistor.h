@@ -21,6 +21,10 @@ void Thermistor_Start(ADC_HandleTypeDef *hadc, float vRef, float rPullUp);
 void Thermistor_Stop(void);
 float Thermistor_ReadTemperature(void);
 extern volatile float tx_temperature;
+// HAL tick of the last reading main() accepted into tx_temperature; only
+// meaningful once tx_temperature_valid is set.
+extern volatile uint32_t tx_temperature_tick;
+extern volatile bool tx_temperature_valid;
 extern volatile float ambient_temperature;
 extern volatile bool tx_overheat_flag;
 

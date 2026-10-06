@@ -22,6 +22,10 @@
 
 bool process_if_command(UartPacket *cmd, UartPacket *resp);
 
+// Everything OW_CTRL_STOP_SWTRIG stops: the trigger, profile auto-cycle and the
+// slaves' armed cycles. Also how a thermal trip ends a run from the main loop.
+uint8_t stop_sequence(void);
+
 // Profile auto-cycle hooks, called from the trigger ISRs in trigger.c.
 bool apply_next_profile_in_cycle(void);
 void reset_profile_cycle_to_start(void);
