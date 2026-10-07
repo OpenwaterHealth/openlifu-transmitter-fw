@@ -24,7 +24,7 @@
       "version": "7883720",
       "description": "Openwater LIFU transmitter application firmware for STM32L443: TX7332 transmit-channel configuration, trigger/pulse-train timing, AFE configuration, module manager with I2C master/slave one-wire enumeration, JSON command interface over USB CDC and UART, SBSFU bootloader hand-off.",
       "publisher": "Openwater",
-      "licenses": [ { "license": { "id": "AGPL-3.0-only" } } ],
+      "licenses": [ { "license": { "id": "AGPL-3.0-or-later" } } ],
       "properties": [
         { "name": "openwater:version-source", "value": "git describe (injected at build time as FW_VERSION)" },
         { "name": "openwater:mcu", "value": "STM32L443RCIx (Arm Cortex-M4)" }

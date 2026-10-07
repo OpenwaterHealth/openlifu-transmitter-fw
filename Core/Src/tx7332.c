@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 #include "main.h"
 #include "tx7332.h"
 #include "common.h"

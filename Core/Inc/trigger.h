@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 #ifndef __TRIGGER_H
 #define __TRIGGER_H
 

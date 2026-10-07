@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 #ifndef LIFU_CONFIG_H
 #define LIFU_CONFIG_H
 
