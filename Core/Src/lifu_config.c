@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 #include "lifu_config.h"
 
 #include "common.h" 

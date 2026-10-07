@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef __LOGGING_H
 #define __LOGGING_H
