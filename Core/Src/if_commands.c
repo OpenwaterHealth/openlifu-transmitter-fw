@@ -114,8 +114,8 @@ void profile_cache_note_write(uint8_t tx_idx, uint16_t start_addr, uint16_t reg_
 	cache_profiles_from_register_range(tx_idx, start_addr, reg_count);
 }
 
-// FDA mode: same execution-order state OW_CTRL_SET_PROFILE_CYCLE fills in, but
-// from a table baked into the image.
+// Preset modes: same execution-order state OW_CTRL_SET_PROFILE_CYCLE fills in, but
+// from the loaded preset.
 bool profile_cycle_install(uint8_t profile_count, const uint8_t *order, uint8_t len)
 {
 	if (order == NULL || profile_count < 1U || profile_count > MAX_PROFILES) return false;
@@ -316,6 +316,10 @@ static void process_i2c_forward(UartPacket *uartResp, const UartPacket* cmd, uin
 				/* USR_CFG write involves a flash erase+program cycle on the slave
 				 * which can take up to ~300 ms; give it enough time to finish. */
 				uint32_t wait_ms = (cmd->command == OW_CMD_USR_CFG && cmd->reserved == 1) ? 400U : 50U;
+#ifdef PRESET_MODE
+				/* So does storing or deleting a preset. */
+				if (cmd->command == OW_PRESET_COMMIT || cmd->command == OW_PRESET_DELETE) wait_ms = 400U;
+#endif
 				uint32_t _t0 = HAL_GetTick();
 				while ((HAL_GetTick() - _t0) < wait_ms) { /* wait for slave to process */ }
 				process_i2c_read_buffer(uartResp, cmd, module_id);
@@ -436,6 +440,15 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
             // reserved == 1: WRITE (cmd->data is JSON text)
 			uartResp->id = cmd->id;
 			uartResp->command = OW_CMD_USR_CFG;
+#ifdef FDA_MODE
+			// FDA mode: the calibration is read-only; it is written before the FDA image goes on.
+			if (cmd->reserved == 1) {
+				uartResp->packet_type = OW_ERROR;
+				uartResp->reserved = OW_FDA_REFUSED;
+				uartResp->data_len = 0;
+				break;
+			}
+#endif
             if (cmd->reserved == 0) {
                 const uint8_t *wire_buf = NULL;
                 uint16_t wire_len = 0;
@@ -609,7 +622,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 	// they belong to the preset the image loaded, not to the host. Refused
 	// before the i2c forward so slaves never see them either. The matching
 	// GET_ commands stay open; only the write side is closed.
-#ifdef FDA_MODE
+#ifdef PRESETS_ENABLED
 	switch (cmd->command)
 	{
 	case OW_CTRL_SET_DELAY_PROFILE:
@@ -717,7 +730,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-#ifdef FDA_MODE
+#ifdef PRESETS_ENABLED
 			// The loaded preset's start_C decides; checked before anything is
 			// armed, so a refusal leaves no state to unwind.
 			{
@@ -796,7 +809,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				// In FDA mode the execution order belongs to the loaded preset and
 				// SET_PROFILE_CYCLE is refused, so the host cannot put it back --
 				// dropping it here would silently disable rastering.
-#ifndef FDA_MODE
+#ifndef PRESETS_ENABLED
 				profile_cycle.is_configured = false;
 				profile_cycle.exec_order_len = 0;
 #endif
@@ -885,6 +898,15 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 			break;
         case OW_CMD_USR_CFG:
+#ifdef FDA_MODE
+			// FDA mode: the calibration is read-only, on every module.
+			if (cmd->reserved == 1) {
+				uartResp->packet_type = OW_ERROR;
+				uartResp->reserved = OW_FDA_REFUSED;
+				uartResp->data_len = 0;
+				break;
+			}
+#endif
 			if (module_id != 0x00)
 			{
 				process_i2c_forward(uartResp, cmd, module_id);
@@ -1140,7 +1162,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 
 			// In FDA mode the execution order comes from the loaded preset.
-#ifdef FDA_MODE
+#ifdef PRESETS_ENABLED
 			uartResp->reserved = OW_INVALID_PACKET;
 			uartResp->packet_type = OW_ERROR;
 			return;
@@ -1246,15 +1268,16 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			reset_profile_cycle_to_start();
 			break;
 		}
-#ifdef FDA_MODE
+#ifdef PRESETS_ENABLED
 		case OW_PRESET_GET: {
 			// Bounded reply out of this module's own presets, so never forwarded:
 			//   [0] count [1] index [2] chips [3] profiles
-			//   [4..7] settings_crc  [8..11] regs_crc computed now  [12..15] regs_crc baked
+			//   [4..7] settings_crc  [8..11] regs_crc computed now  [12..15] regs_crc stored
 			//   [16] id_len [17..] id
 			//   [17+id_len] n, then n x u32 train counts to choose from
 			//   then i16 start_c_x10, i16 shutoff_c_x10                  (all LE)
-			static uint8_t reply[17U + PRESET_ID_MAX + 1U + 4U * PRESET_TRAIN_SEL_MAX + 4U];
+			//   then the blob's module, and the modules its preset spans
+			static uint8_t reply[17U + PRESET_ID_MAX + 1U + 4U * PRESET_TRAIN_SEL_MAX + 4U + 2U];
 			Preset preset;
 			bool found = presets_get(cmd->reserved, &preset);
 			uartResp->command = cmd->command;
@@ -1263,10 +1286,16 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->data_len = 0;
 			if (module_id != 0 || !found) {
 				uartResp->reserved = OW_INVALID_PACKET;
+				// Say whether the slot is empty, owned by the preset before it,
+				// or holds something that no longer parses.
+				if (module_id == 0) {
+					uint8_t state = presets_slot_state(cmd->reserved);
+					uartResp->reserved = (state == OW_SUCCESS) ? OW_BAD_CRC : state;
+				}
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
-			// Both the live CRC and the baked one go back, so the host can see a
+			// Both the live CRC and the stored one go back, so the host can see a
 			// self-check failure rather than just be refused; LOAD still refuses.
 			uint32_t regs_crc = presets_regs_crc(&preset);
 			size_t id_len = preset.id_len;   // presets_get() keeps it within PRESET_ID_MAX
@@ -1295,6 +1324,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			reply[pos++] = (uint8_t)((uint16_t)preset.start_c_x10 >> 8);
 			reply[pos++] = (uint8_t)((uint16_t)preset.shutoff_c_x10);
 			reply[pos++] = (uint8_t)((uint16_t)preset.shutoff_c_x10 >> 8);
+			reply[pos++] = preset.module;
+			reply[pos++] = preset.modules;
 			uartResp->data_len = (uint16_t)pos;
 			uartResp->data = reply;
 			break;
@@ -1304,31 +1335,44 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
-			// Payload: duration index u32 LE -- which of the preset's baked
-			// pulse-train counts to run -- then the regs_crc the host expects.
-			// Run length rides here rather than needing SET_SWTRIG, which the
-			// host must not send in FDA mode; the CRC is what makes the load
-			// refuse a preset the host and image disagree about.
-			if (cmd->data == NULL || cmd->data_len != 8U) {
+			// Payload: duration index u32 LE -- which of the preset's
+			// pulse-train counts to run -- then the regs_crc and settings_crc
+			// the host expects. Run length rides here rather than needing
+			// SET_SWTRIG, which the host must not send in FDA mode; the CRCs
+			// are what make the load refuse a preset the host and image
+			// disagree about, in its registers or anywhere else in its file.
+			// No payload unloads: the host clears a load whose other half, the
+			// console's select, did not go through.
+			if (cmd->data_len != 0U && (cmd->data == NULL || cmd->data_len != 12U)) {
+				if (module_id == 0x00) (void)presets_unload();
 				uartResp->reserved = OW_INVALID_PACKET;
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
 			if (module_id == 0x00) {
-				uint32_t duration = 0U, crc = 0U;
+				if (cmd->data_len == 0U) {
+					if (!presets_unload()) {
+						uartResp->reserved = OW_PRESET_BUSY;
+						uartResp->packet_type = OW_ERROR;
+						return;
+					}
+					break;
+				}
+				uint32_t duration = 0U, crc = 0U, settings = 0U;
 				for (int i = 0; i < 4; i++) {
 					duration |= (uint32_t)cmd->data[i] << (8 * i);
 					crc |= (uint32_t)cmd->data[4 + i] << (8 * i);
-				}
-				Preset preset;
-				if (presets_get(cmd->reserved, &preset) && crc != presets_regs_crc(&preset)) {
-					uartResp->reserved = OW_BAD_CRC;
-					uartResp->packet_type = OW_ERROR;
-					return;
+					settings |= (uint32_t)cmd->data[8 + i] << (8 * i);
 				}
 				// Each module programs its own TX7332 chips from its own copy
 				// of the preset, so slaves get the same command forwarded.
-				if (!presets_load(cmd->reserved, duration, crc)) {
+				if (!presets_load(cmd->reserved, duration, crc, settings)) {
+					// Say so when it was the host and the image disagreeing.
+					Preset preset;
+					if (presets_get(cmd->reserved, &preset) &&
+					    (crc != presets_regs_crc(&preset) || settings != preset.settings_crc)) {
+						uartResp->reserved = OW_BAD_CRC;
+					}
 					uartResp->packet_type = OW_ERROR;
 					return;
 				}
@@ -1336,6 +1380,71 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
+#endif
+#ifdef PRESET_MODE
+		case OW_PRESET_CAPACITY: {
+			// What there is to fill, from this module's own slots like GET:
+			//   [0] slots [1] free slots [2..3] slot size [4..5] largest blob (LE)
+			static uint8_t capacity_reply[6];
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			if (module_id != 0) {
+				uartResp->reserved = OW_INVALID_PACKET;
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+			capacity_reply[0] = (uint8_t)PRESET_SLOTS;
+			capacity_reply[1] = presets_free_slots();
+			capacity_reply[2] = (uint8_t)(PRESET_SLOT_SIZE & 0xFFU);
+			capacity_reply[3] = (uint8_t)(PRESET_SLOT_SIZE >> 8);
+			capacity_reply[4] = (uint8_t)(PRESET_BLOB_MAX & 0xFFU);
+			capacity_reply[5] = (uint8_t)(PRESET_BLOB_MAX >> 8);
+			uartResp->data_len = sizeof(capacity_reply);
+			uartResp->data = capacity_reply;
+			break;
+		}
+		case OW_PRESET_WRITE:
+		case OW_PRESET_COMMIT:
+		case OW_PRESET_DELETE: {
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			// Each module keeps its own presets, so slaves get the same command.
+			if (module_id != 0x00) {
+				process_i2c_forward(uartResp, cmd, module_id);
+				break;
+			}
+			uint8_t result = OW_INVALID_PACKET;
+			if (cmd->command == OW_PRESET_WRITE) {
+				// Payload: offset u16 LE, then that part of the blob.
+				if (cmd->data != NULL && cmd->data_len > 2U) {
+					uint32_t offset = (uint32_t)cmd->data[0] | ((uint32_t)cmd->data[1] << 8);
+					result = presets_stage(cmd->reserved, offset, &cmd->data[2],
+					                       (uint16_t)(cmd->data_len - 2U));
+				}
+			} else if (cmd->command == OW_PRESET_COMMIT) {
+				// Payload: length u32 and CRC-32 u32 of the whole blob, both LE.
+				if (cmd->data != NULL && cmd->data_len == 8U) {
+					uint32_t len = 0U, crc = 0U;
+					for (int i = 0; i < 4; i++) {
+						len |= (uint32_t)cmd->data[i] << (8 * i);
+						crc |= (uint32_t)cmd->data[4 + i] << (8 * i);
+					}
+					result = presets_commit(cmd->reserved, len, crc);
+				}
+			} else {
+				result = presets_delete(cmd->reserved);
+			}
+			if (result != OW_SUCCESS) {
+				uartResp->reserved = result;
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+			break;
+		}
 #endif
 		default:
 			uartResp->addr = 0;
@@ -1358,10 +1467,10 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 	uartResp->id = cmd->id;
 	uartResp->command = cmd->command;
 
-	// In FDA mode the image owns the TX7332 configuration: it is programmed
-	// from a baked preset via OW_PRESET_LOAD, so the host may read the chips
+	// In the preset modes the firmware owns the TX7332 configuration: it is
+	// programmed from a stored preset via OW_PRESET_LOAD, so the host may read the chips
 	// but not write them. Reads stay open for verification and diagnostics.
-#ifdef FDA_MODE
+#ifdef PRESETS_ENABLED
 	switch (cmd->command)
 	{
 	case OW_TX7332_WREG:

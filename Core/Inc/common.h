@@ -66,7 +66,13 @@ typedef enum {
 
 typedef enum {
 	OW_SUCCESS = 0x00,
-	// FDA mode: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
+	// PRESET_MODE: why a preset could not be stored or deleted (presets.h).
+	OW_PRESET_BUSY = 0xF2,       // trigger running; the presets cannot change now
+	OW_PRESET_NO_ROOM = 0xF3,    // blob needs the next slot too, and it is taken or missing
+	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
+	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
+	OW_FDA_REFUSED = 0xF8,       // FDA mode: the user config is read-only
+	// Preset modes: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
 	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
 	OW_TEMP_TOO_HIGH = 0xFA,  // above the loaded preset's start_C
 	OW_NO_PRESET = 0xFB,      // nothing loaded with OW_PRESET_LOAD yet
@@ -144,19 +150,30 @@ typedef enum {
 	OW_AFE_ENUM_TX7332 = 0x31,
 } UstxAfeCommands;
 
-// Baked-in operator presets (see presets.h), FDA_MODE builds only. Command
-// bytes are unique across every packet type (the SDK keeps one command ->
-// packet-type map), so these sit at 0x50, clear of the power board's 0x30-0x43
-// block.
+// Operator presets (see presets.h), FDA_MODE and PRESET_MODE builds only.
+// Command bytes are unique across every packet type (the SDK keeps one
+// command -> packet-type map), so these sit at 0x50, clear of the power
+// board's 0x30-0x43 block.
 //
-// GET answers from the master's flash and is never forwarded. LOAD is
-// forwarded: each module programs its own TX7332 chips and checks the CRC
-// against its own tables.
+// GET and CAPACITY answer from the master's flash and are never forwarded.
+// LOAD is forwarded: each module programs its own TX7332 chips and checks the
+// CRC against its own copy. WRITE, COMMIT, DELETE and CAPACITY exist in
+// PRESET_MODE only; the three that change the presets are forwarded too,
+// since each module keeps its own.
 typedef enum {
 	OW_PRESET_GET = 0x50,   // reserved=index -> count, index, chips, profiles,
 	                        //   settings_crc u32, regs_crc u32, id_len, id
-	OW_PRESET_LOAD = 0x51,  // reserved=index, data=train_count u32 + regs_crc u32
-	                        //   (both LE); OW_ERROR/OW_BAD_CRC if the crc differs
+	OW_PRESET_LOAD = 0x51,  // reserved=index, data=duration index u32 + regs_crc u32
+	                        //   + settings_crc u32 (all LE); OW_ERROR/OW_BAD_CRC if
+	                        //   either crc differs. Refused, or sent with no data,
+	                        //   nothing is left loaded
+	OW_PRESET_WRITE = 0x52, // reserved=slot, data=offset u16 LE + that part of
+	                        //   the blob; offset 0 starts an upload over
+	OW_PRESET_COMMIT = 0x53,// reserved=slot, data=length u32 + CRC-32 u32 of the
+	                        //   whole blob (both LE); stores what was uploaded
+	OW_PRESET_DELETE = 0x54,// reserved=slot; empties it
+	OW_PRESET_CAPACITY = 0x55, // -> slots, free slots, slot size u16,
+	                        //   largest blob u16 (both LE)
 } UstxPresetCommands;
 
 typedef struct  {

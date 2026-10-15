@@ -323,8 +323,8 @@ uint32_t get_trigger_train_count(void)
 }
 
 // Apply a trigger configuration directly, without going through the JSON that
-// the host would normally send. FDA mode uses this: the timing belongs to the
-// baked preset, so loading one configures the sequence as well as the chips.
+// the host would normally send. The preset modes use this: the timing belongs
+// to the preset, so loading one configures the sequence as well as the chips.
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
                         uint32_t pulse_count, uint32_t train_interval_us,
                         uint32_t train_count, uint32_t mode)

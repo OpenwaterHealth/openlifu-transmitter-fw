@@ -143,9 +143,24 @@
  #define ADDR_FLASH_END_ADDRESS ((uint32_t)0x08040000) /* END OF FLASH */
 
 #define FLASH_START_ADDRESS        			((uint32_t)0x08000000)
-#define APPLICATION_ADDRESS        			((uint32_t)0x08010000) // 190 KB application region after metadata
+#ifdef FDA_MODE
+// The bootloader's slot runs to page 125. Its last two pages hold the one
+// preset, linked into the image (FDA_PRESET in the FDA linker scripts).
+#define APPLICATION_ADDRESS        			((uint32_t)0x08010000) // application slot, pages 32-125: signed header, then the image at +0x400
+#define APPLICATION_MAX_SIZE                ((uint32_t)(188U * 1024U))
+#define FDA_PRESET_ADDRESS                  ADDR_FLASH_PAGE_124
+#else
+#define APPLICATION_ADDRESS        			((uint32_t)0x08010000) // application slot, pages 32-109: signed header, then the image at +0x400
+#define APPLICATION_MAX_SIZE                ((uint32_t)(156U * 1024U))
+#endif
 #define APPLICATION_USER_CONFIG    			((uint32_t)0x0803F800) // 2 KB user config region (page 127, end of flash), application use only -- not writable via DFU
-#define APPLICATION_MAX_SIZE                ((uint32_t)(190U * 1024U))
+
+// Presets, pages 110-125 (PRESET_MODE, see presets.h). Outside the
+// application slot: the bootloader erases an image whose slot holds anything
+// past the image, and DFU must not reach the presets either. The bootloader's
+// own memory_map.h has to agree.
+#define PRESETS_ADDRESS                ADDR_FLASH_PAGE_110
+#define PRESETS_SIZE                   ((uint32_t)(ADDR_FLASH_PAGE_126 - ADDR_FLASH_PAGE_110))
 
 #ifdef __cplusplus
 }

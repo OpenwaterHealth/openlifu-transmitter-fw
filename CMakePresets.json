@@ -52,10 +52,9 @@
             "name": "Debug-FDA",
             "inherits": "default",
             "displayName": "Debug (FDA mode)",
-            "description": "Debug FDA build: presets baked in, firmware programs the TX7332 chips and host register writes are refused. Bare metal because the full preset set does not fit the 187K bootloader slot.",
+            "description": "Debug FDA build: the one preset is linked in at the end of the application slot (pages 124-125, Core/Inc/presets/fda_preset.h from the SDK's generate_presets.py); it and the user config are read-only, firmware programs the TX7332 chips and host register writes are refused. Runs under the bootloader whose slot is pages 32-125.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "BARE_METAL": "ON",
                 "FDA_MODE": "ON"
             }
         },
@@ -63,11 +62,52 @@
             "name": "Release-FDA",
             "inherits": "default",
             "displayName": "Release (FDA mode)",
-            "description": "Release FDA build: presets baked in, firmware programs the TX7332 chips and host register writes are refused. Bare metal because the full preset set does not fit the 187K bootloader slot.",
+            "description": "Release FDA build: the one preset is linked in at the end of the application slot (pages 124-125, Core/Inc/presets/fda_preset.h from the SDK's generate_presets.py); it and the user config are read-only, firmware programs the TX7332 chips and host register writes are refused. Runs under the bootloader whose slot is pages 32-125.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "FDA_MODE": "ON"
+            }
+        },
+        {
+            "name": "Release-FDA-BareMetal",
+            "inherits": "default",
+            "displayName": "Release (FDA mode, bare metal)",
+            "description": "Standalone FDA build, no bootloader: FLASH @ 0x08000000, the preset at the same pages 124-125 as under the bootloader. For bench work.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "BARE_METAL": "ON",
                 "FDA_MODE": "ON"
+            }
+        },
+        {
+            "name": "Debug-Preset",
+            "inherits": "default",
+            "displayName": "Debug (Preset mode)",
+            "description": "Debug preset-mode build: editable presets in flash slots, firmware programs the TX7332 chips and host register writes are refused. Needs the bootloader whose application slot ends at page 109.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "PRESET_MODE": "ON"
+            }
+        },
+        {
+            "name": "Release-Preset",
+            "inherits": "default",
+            "displayName": "Release (Preset mode)",
+            "description": "Release preset-mode build: editable presets in flash slots, firmware programs the TX7332 chips and host register writes are refused. Needs the bootloader whose application slot ends at page 109.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "PRESET_MODE": "ON"
+            }
+        },
+        {
+            "name": "Release-Preset-BareMetal",
+            "inherits": "default",
+            "displayName": "Release (Preset mode, bare metal)",
+            "description": "Standalone preset-mode build, no bootloader: FLASH @ 0x08000000. For bench work on a unit without the bootloader.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BARE_METAL": "ON",
+                "PRESET_MODE": "ON"
             }
         }
     ],
@@ -95,6 +135,22 @@
         {
             "name": "Release-FDA",
             "configurePreset": "Release-FDA"
+        },
+        {
+            "name": "Release-FDA-BareMetal",
+            "configurePreset": "Release-FDA-BareMetal"
+        },
+        {
+            "name": "Debug-Preset",
+            "configurePreset": "Debug-Preset"
+        },
+        {
+            "name": "Release-Preset",
+            "configurePreset": "Release-Preset"
+        },
+        {
+            "name": "Release-Preset-BareMetal",
+            "configurePreset": "Release-Preset-BareMetal"
         }
     ]
 }

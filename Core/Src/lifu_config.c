@@ -138,7 +138,10 @@ static void lifu_cfg_ensure_loaded(void)
     if (!lifu_cfg_is_valid(&g_cfg)) {
         // First boot or corrupt -> defaults and persist
         lifu_cfg_make_defaults(&g_cfg);
+#ifndef FDA_MODE
+        // FDA mode never writes the page: a missing calibration stays missing.
         (void)lifu_cfg_writeback();
+#endif
     }
 
     g_cfg_loaded = true;

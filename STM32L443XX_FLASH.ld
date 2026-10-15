@@ -57,7 +57,7 @@ MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 48K
 RAM2 (xrw)      : ORIGIN = 0x10000000, LENGTH = 16K
-FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = 187K /* SBSFU active slot 0x08010000 + 0x400 signed-header offset; slot is 188K, minus the header. Sign with open-lifu-transmitter-bl/py-tools/sign_firmware.py and install the SIGNED image at 0x08010000. */
+FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = 155K /* SBSFU active slot 0x08010000 + 0x400 signed-header offset; slot is 156K (pages 32-109), minus the header. Pages 110-125 above it hold the presets (Core/Inc/memory_map.h). Sign with open-lifu-transmitter-bl/py-tools/sign_firmware.py and install the SIGNED image at 0x08010000. */
 }
 
 /* Highest address of the user mode stack */
