@@ -43,11 +43,16 @@ _Min_Heap_Size = 0x200; /* required amount of heap */
 _Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Memories definition */
+/* FDA builds (CMake: -Wl,--defsym=FDA_MODE=1) link the preset into the end of
+   the app slot. Regular and preset-mode builds share the other layout. */
+FDA_LAYOUT = DEFINED(FDA_MODE) ? FDA_MODE : 0;
+
 MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 48K
   RAM2    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 16K
-  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 220K /* pages 0-109; above are the presets and the config page (Core/Inc/memory_map.h) */
+  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = FDA_LAYOUT ? 248K : 220K /* Regular/preset: pages 0-109, below the presets and the config page. FDA: pages 0-123. */
+  FDA_PRESET (r)  : ORIGIN = 0x0803E000, LENGTH = FDA_LAYOUT ? 4K : 0 /* FDA: pages 124-125, as under the bootloader */
 }
 
 /* Sections */
@@ -177,6 +182,14 @@ SECTIONS
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
   } >RAM
+
+  /* FDA mode's preset (Core/Inc/presets/fda_preset.h). Empty in other builds;
+     its zero-length region turns a stray .fda_preset into a link error. */
+  .fda_preset :
+  {
+    _sfda_preset = .;
+    KEEP(*(.fda_preset))
+  } >FDA_PRESET
 
   /* Remove information from the compiler libraries */
   /DISCARD/ :

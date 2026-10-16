@@ -53,11 +53,16 @@
 ENTRY(Reset_Handler)
 
 /* Specify the memory areas */
+/* FDA builds (CMake: -Wl,--defsym=FDA_MODE=1) link the preset into the end of
+   the app slot. Regular and preset-mode builds share the other layout. */
+FDA_LAYOUT = DEFINED(FDA_MODE) ? FDA_MODE : 0;
+
 MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 48K
 RAM2 (xrw)      : ORIGIN = 0x10000000, LENGTH = 16K
-FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = 155K /* SBSFU active slot 0x08010000 + 0x400 signed-header offset; slot is 156K (pages 32-109), minus the header. Pages 110-125 above it hold the presets (Core/Inc/memory_map.h). Sign with open-lifu-transmitter-bl/py-tools/sign_firmware.py and install the SIGNED image at 0x08010000. */
+FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = FDA_LAYOUT ? 183K : 155K /* SBSFU slot 0x08010000 + 0x400 signed header. Regular/preset: slot pages 32-109, presets in 110-125. FDA: slot pages 32-125, less the preset. Install the SIGNED image at 0x08010000. */
+FDA_PRESET (r)  : ORIGIN = 0x0803E000, LENGTH = FDA_LAYOUT ? 4K : 0 /* FDA: pages 124-125, the end of the slot */
 }
 
 /* Highest address of the user mode stack */
@@ -239,6 +244,14 @@ SECTIONS
   } >RAM
 
 
+
+  /* FDA mode's preset (Core/Inc/presets/fda_preset.h). Empty in other builds;
+     its zero-length region turns a stray .fda_preset into a link error. */
+  .fda_preset :
+  {
+    _sfda_preset = .;
+    KEEP(*(.fda_preset))
+  } >FDA_PRESET
 
   /* Remove information from the standard libraries */
   /DISCARD/ :
