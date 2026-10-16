@@ -78,18 +78,18 @@ enable_language(C ASM)
 # Bare-metal build option (mirrors openlifu-console-fw):
 #   BARE_METAL=OFF (default) : image runs under the SBSFU secure bootloader from
 #                              the active slot — FLASH origin=0x08010400,
-#                              LENGTH=155K, VTOR=0x08010400 (slot + signed-header
+#                              LENGTH=155K (FDA: 183K), VTOR=0x08010400 (slot + signed-header
 #                              offset; uses STM32L443XX_FLASH.ld). This is the
 #                              image that gets signed.
-#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=220K, no
+#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=220K (FDA: 248K), no
 #                              bootloader (uses STM32L443RCIX_FLASH.ld).
 option(BARE_METAL "Build a bare-metal image (no bootloader; runs at 0x08000000)" OFF)
 
 if(BARE_METAL)
-    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=220K")
+    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=220K (FDA: 248K)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH.ld")
 else()
-    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=155K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
+    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=155K (FDA: 183K), VTOR=0x08010400 (SBSFU slot + signed-header offset)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld")
 endif()
 
@@ -137,25 +137,20 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # ---------------------------
 # FDA mode
 # ---------------------------
-# In both preset modes the firmware -- not the host -- programs the TX7332
-# chips from a stored preset; host register writes are refused (see
-# Core/Inc/presets.h).
+# In both preset modes the firmware programs the TX7332 chips from a preset
+# and refuses host register writes (Core/Inc/presets.h).
 #
-# FDA_MODE runs one preset, linked into the image at the end of the
-# application slot: pages 124-125 of the bootloader's slot (32-125). Flashing
-# or updating the image writes it, the bootloader's signature covers it, and
-# nothing in the image writes it or the user config. Its header,
-# Core/Inc/presets/fda_preset.h, comes from the openlifu SDK's
-# examples/generate_presets.py.
+# FDA_MODE links one read-only preset into the end of the bootloader's slot,
+# pages 124-125. Its header, Core/Inc/presets/fda_preset.h, comes from the
+# openlifu SDK's examples/generate_presets.py.
 #
-# PRESET_MODE keeps editable presets in pages 110-125, outside the
-# application slot, so it needs the bootloader whose slot ends at page 109; an
-# older one erases the application once a preset is stored.
+# PRESET_MODE keeps writable presets in pages 110-125. It needs the bootloader
+# whose slot ends at page 109.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
-option(PRESET_MODE "Editable presets in pages 110-125" OFF)
+option(PRESET_MODE "Writable presets in pages 110-125" OFF)
 
 if(FDA_MODE AND PRESET_MODE)
-    message(FATAL_ERROR "FDA_MODE and PRESET_MODE are alternatives: one built-in preset, or editable ones.")
+    message(FATAL_ERROR "FDA_MODE and PRESET_MODE cannot both be ON.")
 endif()
 
 if(FDA_MODE)
@@ -164,15 +159,7 @@ if(FDA_MODE)
         message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER}: generate it with the openlifu SDK's "
                             "examples/generate_presets.py.")
     endif()
-    target_sources(${CMAKE_PROJECT_NAME} PRIVATE "${FDA_PRESET_HEADER}")
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
-
-    # The bootloader's slot runs to page 125, the preset in its last two pages.
-    if(BARE_METAL)
-        set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH_FDA.ld")
-    else()
-        set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH_FDA.ld")
-    endif()
 
     message(STATUS "FDA mode    : ON (preset at pages 124-125)")
 elseif(PRESET_MODE)
@@ -195,7 +182,6 @@ endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_BINARY_DIR}/generated
-    ${CMAKE_SOURCE_DIR}/Core/Inc
 )
 
 # Add project symbols (macros)
@@ -215,7 +201,13 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 )
 
 # Linker script (conditional on BOOTLOADER_BUILD)
-target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-T${LINKER_SCRIPT}")
+# The linker script sizes the app slot and the preset region from FDA_MODE.
+if(FDA_MODE)
+    set(FDA_LAYOUT 1)
+else()
+    set(FDA_LAYOUT 0)
+endif()
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-T${LINKER_SCRIPT}" "-Wl,--defsym=FDA_MODE=${FDA_LAYOUT}")
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES LINK_DEPENDS "${LINKER_SCRIPT}")
 
 # Generate hex and bin files after build
