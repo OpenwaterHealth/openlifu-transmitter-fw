@@ -431,8 +431,9 @@ static bool find_apodization(const uint8_t *p, uint32_t *value)
 bool presets_unload(void)
 {
 	// What a running sequence was loaded with stays: the thermal shutoff is
-	// watching its limits.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	// watching its limits. A paused one resumes on them.
+	uint8_t status = get_trigger_status();
+	if (status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED) return false;
 	preset_loaded = false;
 	return true;
 }

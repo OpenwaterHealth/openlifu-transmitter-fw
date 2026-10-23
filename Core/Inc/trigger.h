@@ -14,7 +14,8 @@ typedef enum {
     TRIGGER_STATUS_READY = 0,
 	TRIGGER_STATUS_RUNNING = 1,
 	TRIGGER_STATUS_ERROR = 2,
-	TRIGGER_STATUS_NOT_CONFIGURED = 3
+	TRIGGER_STATUS_NOT_CONFIGURED = 3,
+	TRIGGER_STATUS_PAUSED = 4     // between trains of a sequence, resumable
 } TriggerStatus;
 
 typedef enum {
@@ -68,6 +69,10 @@ uint32_t get_trigger_pulse_count(void);
 uint32_t get_trigger_period_us(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
+// Pause lands at the next train boundary (at once in a train's gap); the final
+// train runs out instead. Resume withdraws a pause that has not landed yet.
+bool pause_trigger_pulse(void);
+bool resume_trigger_pulse(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
@@ -101,5 +106,6 @@ void TRIG_TIM15_IRQHandler(void);
 __weak void pulse_complete_callback(uint32_t curr_count, uint32_t total_count);
 __weak void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count);
 __weak void sequence_complete_callback(uint32_t total_count) ;
+__weak void sequence_paused_callback(uint32_t curr_count, uint32_t total_count);
 
 #endif /* __TRIGGER_H */
