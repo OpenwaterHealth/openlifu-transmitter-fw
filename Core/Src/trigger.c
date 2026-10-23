@@ -793,6 +793,12 @@ bool resume_trigger_pulse(void)
 	return true;
 }
 
+bool trigger_pause_expired(void)
+{
+	return _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED &&
+	       (HAL_GetTick() - _paused_tick) >= TRIGGER_PAUSE_TIMEOUT_S * 1000U;
+}
+
 void TRIG_TIM2_IRQHandler(void) {
 
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return;

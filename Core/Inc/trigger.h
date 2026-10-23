@@ -32,6 +32,11 @@ typedef enum {
 	AUTO_CYCLE_ERROR = 2
 } AutoCycleState_e;
 
+// A pause not resumed within this ends the sequence (main loop, 1 s resolution).
+#ifndef TRIGGER_PAUSE_TIMEOUT_S
+#define TRIGGER_PAUSE_TIMEOUT_S (30U * 60U)
+#endif
+
 // 1ms window reserved for allowing the profile switch to happen
 // in-between trigger pulses. Measured SPI write for all apods + profiles
 // is ~500us so setting double for margin.
@@ -73,6 +78,7 @@ uint8_t stop_trigger_pulse(void);
 // train runs out instead. Resume withdraws a pause that has not landed yet.
 bool pause_trigger_pulse(void);
 bool resume_trigger_pulse(void);
+bool trigger_pause_expired(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
