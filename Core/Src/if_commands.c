@@ -519,6 +519,13 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 		case OW_CMD_DFU:
 			uartResp->id = cmd->id;
 			uartResp->command = OW_CMD_DFU;
+#ifdef FDA_MODE
+			// FDA mode: no firmware update over the host link, on any module (SR-021).
+			uartResp->packet_type = OW_ERROR;
+			uartResp->reserved = OW_FDA_REFUSED;
+			uartResp->data_len = 0;
+			break;
+#else
 			module_id = ModuleManager_GetModuleIndex(cmd->addr);
 			if (module_id == 0x00){
 				uartResp->addr = cmd->addr;
@@ -537,6 +544,7 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
+#endif
 		default:
 			uartResp->addr = 0;
 			uartResp->reserved = 0;
@@ -980,6 +988,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 			break;
 		case OW_CMD_DFU:
+#ifdef FDA_MODE
+			// FDA mode: no firmware update over the host link, including the
+			// 0x77 STM32 ROM loader, on any module (SR-021).
+			uartResp->packet_type = OW_ERROR;
+			uartResp->reserved = OW_FDA_REFUSED;
+			uartResp->data_len = 0;
+			break;
+#else
 			if (module_id == 0x00){
 				uartResp->command = cmd->command;
 				uartResp->addr = cmd->addr;
@@ -999,6 +1015,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
+#endif
 		case OW_CMD_ASYNC:
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
@@ -1810,6 +1827,14 @@ bool process_if_command(UartPacket *cmd, UartPacket *resp)
 		 * cmd->reserved = number of bytes to read back (command=0x01 only, max 255)
 		 * cmd->data     = bytes to write (may be empty for a read-only op)
 		 */
+#ifdef FDA_MODE
+		/* FDA mode: no raw I2C, which reaches the slave DFU bootloader (SR-021). */
+		resp->command  = cmd->command;
+		resp->addr     = cmd->addr;
+		resp->packet_type = OW_ERROR;
+		resp->reserved = OW_FDA_REFUSED;
+		break;
+#else
 		static uint8_t i2c_passthru_rx[256];
 		uint8_t i2c_addr = cmd->addr;
 		uint8_t do_read  = (cmd->command == 0x01);
@@ -1841,6 +1866,7 @@ bool process_if_command(UartPacket *cmd, UartPacket *resp)
 			resp->data     = i2c_passthru_rx;
 		}
 		break;
+#endif
 	}
 	default:
 		resp->data_len = 0;
