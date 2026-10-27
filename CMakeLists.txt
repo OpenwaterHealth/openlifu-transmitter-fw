@@ -157,17 +157,17 @@ if(FDA_MODE)
     message(STATUS "FDA mode    : ON (preset at pages 124-125)")
 elseif(PRESET_MODE)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
-    set(FW_BUILD_VARIANT "preset")
+    set(FW_BUILD_VARIANT "dev")
 
     message(STATUS "Preset mode : ON (presets in flash slots)")
 else()
-    set(FW_BUILD_VARIANT "ruo")
+    set(FW_BUILD_VARIANT "dev")
     message(STATUS "FDA mode    : OFF (host owns the TX7332 registers)")
 endif()
 
 # OW_CMD_VERSION returns FW_VERSION. The "+<variant>" suffix (semver build
-# metadata) lets the host tell an FDA image from a preset or research (RUO)
-# image of the same commit without writing to the device.
+# metadata) lets the host tell an FDA image ("fda") from a development image
+# ("dev": every other build) of the same commit without writing to the device.
 set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
 
 message(STATUS "FW version   : ${FW_VERSION_STRING}")
