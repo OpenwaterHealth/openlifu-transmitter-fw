@@ -52,7 +52,7 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-# version.h is configured below, once FDA_MODE / PRESET_MODE set the build variant.
+# version.h is configured below, once FDA_MODE sets the build variant.
 
 # Set the project name
 set(CMAKE_PROJECT_NAME lifu-transmitter-fw)
@@ -124,26 +124,24 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/utils.c
     Core/Src/demo.c
     Core/Src/presets.c
+    Core/Src/preset_policy.c
 )
 
 # ---------------------------
 # FDA mode
 # ---------------------------
-# In both preset modes the firmware programs the TX7332 chips from a preset
-# and refuses host register writes (Core/Inc/presets.h).
+# Two builds (Core/Inc/presets.h):
 #
 # FDA_MODE links one read-only preset into the end of the bootloader's slot,
-# pages 124-125. Its header, Core/Inc/presets/fda_preset.h, comes from the
-# openlifu SDK's examples/generate_presets.py.
+# pages 124-125, and is always preset-locked: the host loads the preset and
+# can change nothing else. Its header, Core/Inc/presets/fda_preset.h, comes
+# from the openlifu SDK's examples/generate_presets.py.
 #
-# PRESET_MODE keeps writable presets in pages 110-125. It needs the bootloader
-# whose slot ends at page 109.
+# Every other build is DEV: full host control, presets in pages 110-125, and
+# a runtime lock (OW_PRESET_LOCK) that refuses what FDA_MODE refuses until the
+# next reset. Only a bare-metal DEV image can store presets, since the
+# bootloader's slot still covers pages 110-125.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
-option(PRESET_MODE "Writable presets in pages 110-125" OFF)
-
-if(FDA_MODE AND PRESET_MODE)
-    message(FATAL_ERROR "FDA_MODE and PRESET_MODE cannot both be ON.")
-endif()
 
 if(FDA_MODE)
     set(FDA_PRESET_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/fda_preset.h")
@@ -151,23 +149,19 @@ if(FDA_MODE)
         message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER}: generate it with the openlifu SDK's "
                             "examples/generate_presets.py.")
     endif()
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
     set(FW_BUILD_VARIANT "fda")
 
-    message(STATUS "FDA mode    : ON (preset at pages 124-125)")
-elseif(PRESET_MODE)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
-    set(FW_BUILD_VARIANT "dev")
-
-    message(STATUS "Preset mode : ON (presets in flash slots)")
+    message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
 else()
     set(FW_BUILD_VARIANT "dev")
-    message(STATUS "FDA mode    : OFF (host owns the TX7332 registers)")
+    message(STATUS "FDA mode    : OFF (DEV: host control, preset slots, runtime lock)")
 endif()
 
 # OW_CMD_VERSION returns FW_VERSION. The "+<variant>" suffix (semver build
-# metadata) lets the host tell an FDA image ("fda") from a development image
-# ("dev": every other build) of the same commit without writing to the device.
+# metadata) lets the host tell an FDA image ("fda") from a DEV image ("dev")
+# of the same commit without writing to the device. Whether a DEV image is
+# locked is runtime state: OW_PRESET_LOCK reports it.
 set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
 
 message(STATUS "FW version   : ${FW_VERSION_STRING}")

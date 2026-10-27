@@ -14,7 +14,7 @@
             "name": "Debug",
             "inherits": "default",
             "displayName": "Debug (Bootloader slot)",
-            "description": "Debug build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400",
+            "description": "DEV debug build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. Full host control and the runtime preset lock; cannot store presets (Core/Inc/presets.h).",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug"
             }
@@ -23,7 +23,7 @@
             "name": "Release",
             "inherits": "default",
             "displayName": "Release (Bootloader slot)",
-            "description": "Release build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. This is the image that gets signed.",
+            "description": "DEV release build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. This is the image that gets signed. Full host control and the runtime preset lock; cannot store presets (Core/Inc/presets.h).",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
@@ -32,7 +32,7 @@
             "name": "Debug-BareMetal",
             "inherits": "default",
             "displayName": "Debug (Bare metal)",
-            "description": "Standalone debug build, no bootloader: FLASH @ 0x08000000",
+            "description": "Standalone DEV debug build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 110-125.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "BARE_METAL": "ON"
@@ -42,7 +42,7 @@
             "name": "Release-BareMetal",
             "inherits": "default",
             "displayName": "Release (Bare metal)",
-            "description": "Standalone release build, no bootloader: FLASH @ 0x08000000",
+            "description": "Standalone DEV release build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 110-125.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "BARE_METAL": "ON"
@@ -78,37 +78,6 @@
                 "BARE_METAL": "ON",
                 "FDA_MODE": "ON"
             }
-        },
-        {
-            "name": "Debug-Preset",
-            "inherits": "default",
-            "displayName": "Debug (Preset mode)",
-            "description": "Writable presets in pages 110-125. Host register writes are refused. Needs the bootloader whose slot ends at page 109.",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "PRESET_MODE": "ON"
-            }
-        },
-        {
-            "name": "Release-Preset",
-            "inherits": "default",
-            "displayName": "Release (Preset mode)",
-            "description": "Writable presets in pages 110-125. Host register writes are refused. Needs the bootloader whose slot ends at page 109.",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "PRESET_MODE": "ON"
-            }
-        },
-        {
-            "name": "Release-Preset-BareMetal",
-            "inherits": "default",
-            "displayName": "Release (Preset mode, bare metal)",
-            "description": "Release-Preset without the bootloader, for bench work. FLASH @ 0x08000000.",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "BARE_METAL": "ON",
-                "PRESET_MODE": "ON"
-            }
         }
     ],
     "buildPresets": [
@@ -139,18 +108,6 @@
         {
             "name": "Release-FDA-BareMetal",
             "configurePreset": "Release-FDA-BareMetal"
-        },
-        {
-            "name": "Debug-Preset",
-            "configurePreset": "Debug-Preset"
-        },
-        {
-            "name": "Release-Preset",
-            "configurePreset": "Release-Preset"
-        },
-        {
-            "name": "Release-Preset-BareMetal",
-            "configurePreset": "Release-Preset-BareMetal"
         }
     ]
 }

@@ -1,0 +1,22 @@
+name: Host unit tests
+
+# Host-side tests of firmware logic that has no hardware dependency
+# (tests/unit). Runs on every pull request, whatever its base branch, since
+# the firmware build itself only runs on main, next and tags.
+on:
+  pull_request:
+  push:
+    branches: [ main, next ]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run host unit tests (DEV and FDA builds)
+        run: sh tests/unit/run.sh
