@@ -121,9 +121,11 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	if (out->train_count_len < 1U) return false;
 	if (!take(&c, 4U * (uint32_t)out->train_count_len, &out->train_counts)) return false;
 
-	if (!take(&c, 4U, &f)) return false;
+	if (!take(&c, 6U, &f)) return false;
 	out->start_c_x10 = (int16_t)rd_u16(&f[0]);
 	out->shutoff_c_x10 = (int16_t)rd_u16(&f[2]);
+	out->treatment_timeout_s = rd_u16(&f[4]);
+	if (out->treatment_timeout_s < 1U) return false;
 
 	out->chips = c.p;
 	for (uint8_t chip = 0; chip < out->chip_count; chip++) {
@@ -444,7 +446,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	// Rewriting the delay and pattern registers underneath a running sequence
 	// would change the output mid-burst. Otherwise any refusal, or a load that
 	// fails part way, leaves nothing loaded, so the trigger cannot start on an
-	// earlier load the host no longer matches.
+	// earlier load the host no longer matches. A timed-out sequence is ended
+	// with STOP first, as the SDK does, so the load cannot hide the TIMEOUT.
+	if (get_trigger_status() == TRIGGER_STATUS_TIMEOUT) return false;
 	if (!presets_unload()) return false;
 
 	Preset preset;
@@ -504,6 +508,8 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	                        TRIGGER_MODE_SEQUENCE)) {
 		return false;
 	}
+
+	trigger_set_timeout_s(preset.treatment_timeout_s);
 
 	// Make the starting profile active so the first trigger uses it.
 	for (uint8_t c = 0; c < chips; c++) {

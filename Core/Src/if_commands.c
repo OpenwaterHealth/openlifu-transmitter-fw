@@ -613,9 +613,10 @@ uint8_t stop_sequence(void)
 static void start_sequence(UartPacket *uartResp, bool resume)
 {
 #ifdef PRESETS_ENABLED
-	// The loaded preset's start_C decides; checked before anything is
-	// armed, so a refusal leaves no state to unwind.
-	{
+	// The loaded preset's start_C decides a START; checked before anything
+	// is armed, so a refusal leaves no state to unwind. A RESUME is held
+	// to shutoff_C instead, by its caller (SR-023).
+	if (!resume) {
 		static char reason[64];
 		uint8_t refused = presets_start_check();
 		if (refused != OW_SUCCESS) {
@@ -827,10 +828,19 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				break;
 			}
 			// Refused while hot, unlike START: the pause stays for a later resume.
+			// After a timeout the status is TIMEOUT, so that is refused here too.
 			if (get_trigger_status() != TRIGGER_STATUS_PAUSED || tx_overheat_flag) {
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}
+#ifdef PRESETS_ENABLED
+			// The preset's shutoff_C, or no fresh reading, as a running sequence
+			// would be stopped by; start_C does not apply to a resume (SR-023).
+			if (presets_thermal_trip()) {
+				uartResp->packet_type = OW_ERROR;
+				break;
+			}
+#endif
 			start_sequence(uartResp, true);
 			break;
 		case OW_CTRL_STOP_SWTRIG:
