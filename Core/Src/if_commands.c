@@ -618,15 +618,18 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 		module_id = (uint8_t)cmd->addr;
 	}
 
-	// These reach the TX7332 selector and apodization registers, so in FDA mode
-	// they belong to the preset the image loaded, not to the host. Refused
-	// before the i2c forward so slaves never see them either. The matching
-	// GET_ commands stay open; only the write side is closed.
+	// These reach the TX7332 selector and apodization registers, or the trigger
+	// timing, so in the preset builds they belong to the loaded preset, not to
+	// the host. Refused before the i2c forward so slaves never see them either.
+	// The matching GET_ commands stay open; only the write side is closed.
+	// OW_PRESET_LOAD carries the run-length choice, so the host has no need
+	// for SET_SWTRIG here.
 #ifdef PRESETS_ENABLED
 	switch (cmd->command)
 	{
 	case OW_CTRL_SET_DELAY_PROFILE:
 	case OW_CTRL_SET_PATTERN_PROFILE:
+	case OW_CTRL_SET_SWTRIG:
 		uartResp->command = cmd->command;
 		uartResp->addr = cmd->addr;
 		uartResp->reserved = OW_INVALID_PACKET;
@@ -806,13 +809,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				// OW_CTRL_SET_PROFILE_CYCLE again after this command.
 				auto_cycle_stop();
 				trigger_slave_disarm();   // no-op on the master
-				// In FDA mode the execution order belongs to the loaded preset and
-				// SET_PROFILE_CYCLE is refused, so the host cannot put it back --
-				// dropping it here would silently disable rastering.
-#ifndef PRESETS_ENABLED
 				profile_cycle.is_configured = false;
 				profile_cycle.exec_order_len = 0;
-#endif
 				profile_cycle.current_exec_index = 0;
 
 				if(!set_trigger_data((char *)cmd->data, cmd->data_len))
@@ -1338,7 +1336,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			// Payload: duration index u32 LE -- which of the preset's
 			// pulse-train counts to run -- then the regs_crc and settings_crc
 			// the host expects. Run length rides here rather than needing
-			// SET_SWTRIG, which the host must not send in FDA mode; the CRCs
+			// SET_SWTRIG, which the preset builds refuse; the CRCs
 			// are what make the load refuse a preset the host and image
 			// disagree about, in its registers or anywhere else in its file.
 			// No payload unloads: the host clears a load whose other half, the
