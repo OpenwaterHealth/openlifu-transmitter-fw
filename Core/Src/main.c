@@ -719,10 +719,15 @@ int main(void)
       }
 #endif
 
-      // A pause not resumed in time ends the sequence; resume is refused after.
-      if (trigger_pause_expired())
+      // The treatment timeout ends a running or paused sequence. The preset
+      // goes with it, so only a STOP and a fresh load can start another.
+      if (trigger_timeout_expired())
       {
         (void)stop_sequence();
+#ifdef PRESETS_ENABLED
+        (void)presets_unload();
+#endif
+        trigger_end_timeout();
       }
     }
   }
