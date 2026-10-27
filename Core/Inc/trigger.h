@@ -68,6 +68,7 @@ uint32_t get_trigger_pulse_count(void);
 uint32_t get_trigger_period_us(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
+void trigger_register_interlock(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
 uint8_t get_trigger_mode(void);
