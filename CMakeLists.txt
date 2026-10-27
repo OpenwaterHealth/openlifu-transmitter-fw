@@ -52,15 +52,7 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-message(STATUS "FW version   : ${FW_GIT_DESCRIBE}")
-message(STATUS "FW git sha   : ${FW_GIT_SHA}")
-message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
-
-configure_file(
-    ${CMAKE_SOURCE_DIR}/version.h.in
-    ${CMAKE_BINARY_DIR}/generated/version.h
-    @ONLY
-)
+# version.h is configured below, once FDA_MODE / PRESET_MODE set the build variant.
 
 # Set the project name
 set(CMAKE_PROJECT_NAME lifu-transmitter-fw)
@@ -160,15 +152,33 @@ if(FDA_MODE)
                             "examples/generate_presets.py.")
     endif()
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
+    set(FW_BUILD_VARIANT "fda")
 
     message(STATUS "FDA mode    : ON (preset at pages 124-125)")
 elseif(PRESET_MODE)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
+    set(FW_BUILD_VARIANT "dev")
 
     message(STATUS "Preset mode : ON (presets in flash slots)")
 else()
+    set(FW_BUILD_VARIANT "dev")
     message(STATUS "FDA mode    : OFF (host owns the TX7332 registers)")
 endif()
+
+# OW_CMD_VERSION returns FW_VERSION. The "+<variant>" suffix (semver build
+# metadata) lets the host tell an FDA image ("fda") from a development image
+# ("dev": every other build) of the same commit without writing to the device.
+set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+
+message(STATUS "FW version   : ${FW_VERSION_STRING}")
+message(STATUS "FW git sha   : ${FW_GIT_SHA}")
+message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/version.h.in
+    ${CMAKE_BINARY_DIR}/generated/version.h
+    @ONLY
+)
 
 if(DEBUG_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/logging.c)
