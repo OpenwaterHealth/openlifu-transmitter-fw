@@ -17,7 +17,12 @@ from pathlib import Path
 import pytest
 from openlifu_sdk.io.LIFUConfig import OW_CONTROLLER, OW_ERROR
 from openlifu_sdk.io.LIFUTXDevice import LIFUTxDevice
-from openlifu_sdk.io.LIFUTXPresets import compile_preset, store_preset, verify_preset
+from openlifu_sdk.io.LIFUTXPresets import (
+    compile_preset,
+    preset_id,
+    store_preset,
+    verify_preset,
+)
 
 # Not in the SDK yet (Core/Inc/common.h).
 OW_PRESET_LOCK = 0x56
@@ -40,7 +45,9 @@ def machine_config(request):
     if path is None:
         pytest.skip("no --preset given")
     raw = Path(path).read_bytes()
-    return compile_preset(json.loads(raw), settings_bytes=raw)
+    # A released settings .json carries no "id": it comes from the file name,
+    # as generate_presets.py named the preset built into the image.
+    return compile_preset(json.loads(raw), preset_id=preset_id(path), settings_bytes=raw)
 
 
 @pytest.fixture(scope="session")
