@@ -852,6 +852,11 @@ void sequence_paused_callback(uint32_t curr_count, uint32_t total_count) {
 	send_trigger_status("PAUSED", curr_count, total_count);
 }
 
+// The treatment timeout ended the sequence; curr_count is the trains delivered.
+void sequence_timeout_callback(uint32_t curr_count, uint32_t total_count) {
+	send_trigger_status("TIMEOUT", curr_count, total_count);
+}
+
 void pulse_complete_callback(uint32_t curr_count, uint32_t total_count) {
     // Called after pulse is complete not supported
 }

@@ -27,6 +27,10 @@ static volatile bool _resume_wait = false;   // HIRES is running out that gap
 static volatile uint32_t _gap_elapsed_us = 0;  // of the last train's period, at the pause
 static volatile uint32_t _paused_tick = 0;
 
+// Treatment timeout: START begins the clock, and pauses do not hold it.
+static volatile uint32_t _run_start_tick = 0;
+static uint32_t _timeout_ms = 0;               // 0: none
+
 static volatile OW_TimerData _timerDataConfig = {
 		.TriggerFrequencyHz = 0,
 		.TriggerPulseWidthUsec = 0,
@@ -98,7 +102,8 @@ static void timerDataToJson(char *jsonString, size_t max_length)
 			  _timerDataConfig.ProfileIncrement,
 			  (unsigned long)_trainCount,
 			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING ? "RUNNING" :
-			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ? "PAUSED" : "STOPPED");
+			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ? "PAUSED" :
+			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_TIMEOUT ? "TIMEOUT" : "STOPPED");
 }
 
 static int jsonToTimerData(const char *jsonString)
@@ -316,6 +321,9 @@ void print_OW_TimerData(const OW_TimerData *data) {
     	break;
     case TRIGGER_STATUS_PAUSED:
         printf("TriggerStatus: PAUSED\r\n");
+    	break;
+    case TRIGGER_STATUS_TIMEOUT:
+        printf("TriggerStatus: TIMEOUT\r\n");
     	break;
     default:
         printf("TriggerStatus: NOT_CONFIGURED\r\n");
@@ -611,6 +619,7 @@ uint8_t start_trigger_pulse(void) {
     if(_timerDataConfig.TriggerPulseTrainInterval>0) {
         HAL_TIM_Base_Start_IT(&HIRES_TIMER);
     }
+    _run_start_tick = HAL_GetTick();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_RUNNING;
     return TRIGGER_STATUS_RUNNING;
 }
@@ -625,8 +634,9 @@ uint8_t stop_trigger_pulse(void) {
     _pause_pending = false;
     _resume_wait = false;
 
-	// Paused: the timers are already stopped and the pin parked.
-	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED) {
+	// Paused or timed out: the timers are already stopped and the pin parked.
+	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ||
+	    _timerDataConfig.TriggerStatus == TRIGGER_STATUS_TIMEOUT) {
 		_timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
 		return TRIGGER_STATUS_READY;
 	}
@@ -793,10 +803,26 @@ bool resume_trigger_pulse(void)
 	return true;
 }
 
-bool trigger_pause_expired(void)
+void trigger_set_timeout_s(uint32_t timeout_s)
 {
-	return _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED &&
-	       (HAL_GetTick() - _paused_tick) >= TRIGGER_PAUSE_TIMEOUT_S * 1000U;
+	_timeout_ms = timeout_s * 1000U;
+}
+
+bool trigger_timeout_expired(void)
+{
+	uint8_t status = _timerDataConfig.TriggerStatus;
+	return _timeout_ms != 0U &&
+	       (status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED) &&
+	       (HAL_GetTick() - _run_start_tick) >= _timeout_ms;
+}
+
+void trigger_end_timeout(void)
+{
+	// The final train went out before the stop landed: that is a completion.
+	if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY ||
+	    _trainCount >= _timerDataConfig.TriggerPulseTrainCount) return;
+	_timerDataConfig.TriggerStatus = TRIGGER_STATUS_TIMEOUT;
+	sequence_timeout_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
 }
 
 void TRIG_TIM2_IRQHandler(void) {
