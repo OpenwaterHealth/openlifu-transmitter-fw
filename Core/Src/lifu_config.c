@@ -96,6 +96,10 @@ static bool lifu_cfg_is_valid(const lifu_cfg_t *cfg)
 // - erases page and writes words
 static HAL_StatusTypeDef lifu_cfg_writeback(void)
 {
+#ifdef FDA_MODE
+    // FDA images never write the config page; every config write ends here.
+    return HAL_ERROR;
+#else
     HAL_StatusTypeDef st;
 
     // bump monotonic sequence
@@ -116,6 +120,7 @@ static HAL_StatusTypeDef lifu_cfg_writeback(void)
                      sizeof(lifu_cfg_t));
 
     return st;
+#endif
 }
 
 // Raw load from flash into g_cfg
