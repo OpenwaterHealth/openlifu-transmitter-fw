@@ -61,8 +61,8 @@ MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 48K
 RAM2 (xrw)      : ORIGIN = 0x10000000, LENGTH = 16K
-FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = FDA_LAYOUT ? 183K : 155K /* SBSFU slot 0x08010000 + 0x400 signed header. Regular/preset: slot pages 32-109, presets in 110-125. FDA: slot pages 32-125, less the preset. Install the SIGNED image at 0x08010000. */
-FDA_PRESET (r)  : ORIGIN = 0x0803E000, LENGTH = FDA_LAYOUT ? 4K : 0 /* FDA: pages 124-125, the end of the slot */
+FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = FDA_LAYOUT ? 151K : 155K /* SBSFU slot 0x08010000 + 0x400 signed header; slot pages 32-109, presets in 110-125. FDA: less the preset. Install the SIGNED image at 0x08010000. */
+FDA_PRESET (r)  : ORIGIN = 0x08036000, LENGTH = FDA_LAYOUT ? 4K : 0 /* FDA: pages 108-109, the end of the slot */
 }
 
 /* Highest address of the user mode stack */
