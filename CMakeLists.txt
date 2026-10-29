@@ -141,6 +141,15 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
 option(PRESET_MODE "Writable presets in pages 110-125" OFF)
 
+# A presets-only (FDA_MODE) image reports which preset set it carries:
+# "fda" (the released preset) or "test" (the test presets). It must match a
+# preset context in openlifu-diathermy-application.
+set(FW_PRESET_VARIANT "fda" CACHE STRING "Preset set in a presets-only image: fda or test")
+set_property(CACHE FW_PRESET_VARIANT PROPERTY STRINGS fda test)
+if(NOT FW_PRESET_VARIANT MATCHES "^(fda|test)$")
+    message(FATAL_ERROR "FW_PRESET_VARIANT must be fda or test, not '${FW_PRESET_VARIANT}'.")
+endif()
+
 if(FDA_MODE AND PRESET_MODE)
     message(FATAL_ERROR "FDA_MODE and PRESET_MODE cannot both be ON.")
 endif()
@@ -152,23 +161,29 @@ if(FDA_MODE)
                             "examples/generate_presets.py.")
     endif()
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
-    set(FW_BUILD_VARIANT "fda")
+    set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 
     message(STATUS "FDA mode    : ON (preset at pages 124-125)")
 elseif(PRESET_MODE)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
-    set(FW_BUILD_VARIANT "dev")
+    set(FW_BUILD_VARIANT "")
 
     message(STATUS "Preset mode : ON (presets in flash slots)")
 else()
-    set(FW_BUILD_VARIANT "dev")
+    set(FW_BUILD_VARIANT "")
     message(STATUS "FDA mode    : OFF (host owns the TX7332 registers)")
 endif()
 
-# OW_CMD_VERSION returns FW_VERSION. The "+<variant>" suffix (semver build
-# metadata) lets the host tell an FDA image ("fda") from a development image
-# ("dev": every other build) of the same commit without writing to the device.
-set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+# OW_CMD_VERSION returns FW_VERSION. A presets-only image appends
+# "+<FW_PRESET_VARIANT>" (semver build metadata), so the host can tell which
+# preset set it carries without writing to the device. Any other build has no
+# suffix: all commands are enabled and the host treats it as a development or
+# service image.
+if(FW_BUILD_VARIANT)
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+else()
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}")
+endif()
 
 message(STATUS "FW version   : ${FW_VERSION_STRING}")
 message(STATUS "FW git sha   : ${FW_GIT_SHA}")
