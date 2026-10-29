@@ -7,7 +7,7 @@
 #ifndef VERSION_H
 #define VERSION_H
 
-#define FW_VERSION  "@FW_GIT_DESCRIBE@"
+#define FW_VERSION  "@FW_VERSION_STRING@"
 #define FW_SHA      "@FW_GIT_SHA@"
 #define FW_BUILD_TIME "@FW_BUILD_TIME_UTC@"
 
