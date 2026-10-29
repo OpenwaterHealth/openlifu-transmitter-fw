@@ -711,13 +711,11 @@ int main(void)
         }
       }
 
-#ifdef PRESETS_ENABLED
       // The loaded preset's shutoff_C, or a thermistor gone quiet, ends a run.
       if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
       {
         (void)stop_sequence();
       }
-#endif
     }
   }
   /* USER CODE END 3 */

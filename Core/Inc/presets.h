@@ -2,17 +2,27 @@
  * presets.h
  *
  * Presets the firmware -- not the host -- programs the TX7332 chips from. The
- * host picks one with OW_PRESET_LOAD; host register writes are refused.
+ * host picks one with OW_PRESET_LOAD.
  *
- *   FDA_MODE     one preset, linked into the image at the end of the
- *                application slot (pages 124-125, the FDA linker scripts'
- *                FDA_PRESET region), from Core/Inc/presets/fda_preset.h.
- *                Flashing or updating the image writes it; nothing in the
- *                image writes it, or the user config.
- *   PRESET_MODE  presets in pages 110-125, above the application slot, which
- *                the host stores and deletes: 16 slots of one page, slot N
- *                being preset index N. A blob longer than a page runs on into
- *                the next slot, which then has no preset of its own.
+ *   FDA_MODE  one preset, linked into the image at the end of the
+ *             application slot (pages 124-125, the FDA linker scripts'
+ *             FDA_PRESET region), from Core/Inc/presets/fda_preset.h.
+ *             Flashing or updating the image writes it; nothing in the image
+ *             writes it, or the user config. Always locked (below).
+ *   DEV       every other build: presets in pages 110-125, above the
+ *             application slot: 16 slots of one page, slot N being preset
+ *             index N. A blob longer than a page runs on into the next slot,
+ *             which then has no preset of its own. The host may also write
+ *             the registers and trigger itself, as a research build does.
+ *
+ * The lock (OW_PRESET_LOCK) puts a DEV image in the FDA image's place: the
+ * host may load presets but not change them, the registers, the trigger, the
+ * user config or the firmware (preset_policy.h). Only a reset unlocks it.
+ * Unlocked, a raw register, profile or trigger write leaves nothing loaded.
+ *
+ * Only a bare-metal DEV image stores presets (PRESET_STORE). Under the
+ * bootloader, pages 110-125 are the end of its slot, which it checks are
+ * erased at every boot, so a stored preset would stop the image booting.
  *
  * A module programs only its own chips, so a preset spanning modules is one
  * blob per module, in that module's own flash, with its own regs_crc.
@@ -29,14 +39,15 @@
  * A stored upload is staged in RAM and written only once all of it has
  * arrived and checks out; its magic is programmed last, so a write cut short
  * leaves a slot that reads as empty.
- *
- * Nothing here exists unless FDA_MODE or PRESET_MODE defines PRESETS_ENABLED.
  */
 
 #ifndef INC_PRESETS_H_
 #define INC_PRESETS_H_
 
-#ifdef PRESETS_ENABLED
+// USER_VECT_TAB_ADDRESS is set for every image that runs under the bootloader.
+#if !defined(FDA_MODE) && !defined(USER_VECT_TAB_ADDRESS)
+#define PRESET_STORE
+#endif
 
 #include "tx7332.h"
 
@@ -81,7 +92,7 @@
 #define PRESET_SLOT_SIZE   2048u                       // one flash page
 #define PRESET_BLOB_MAX    (2u * PRESET_SLOT_SIZE)     // a blob may take two slots
 
-// Preset indexes: FDA mode runs one preset, from slot 0.
+// Preset indexes: FDA mode runs one preset, from slot 0; DEV has every slot.
 #ifdef FDA_MODE
 #define PRESET_COUNT 1u
 #else
@@ -186,6 +197,43 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
  */
 bool presets_unload(void);
 
+/**
+ * @brief  An unlocked host write is about to change the registers, profiles
+ *         or trigger (preset_policy_raw_write()) of this module (here) or of
+ *         another one it is forwarded to. Here, leave nothing loaded, since
+ *         the loaded preset no longer describes the chips; elsewhere, that
+ *         module unloads itself when it runs the write.
+ * @return false, changing nothing, if a loaded preset is running: the write,
+ *         wherever it goes, would change it mid-burst and is refused. With
+ *         nothing loaded, always true.
+ */
+bool presets_raw_write(bool here);
+
+/** Is a preset loaded on this module? */
+bool presets_loaded(void);
+
+// What this module has loaded (OW_PRESET_LOADED).
+typedef struct {
+	uint8_t index;
+	uint8_t duration_index;            // the run-length choice the load made
+	uint32_t train_count;              // and the pulse-train count it resolved to
+	uint32_t settings_crc;
+	uint32_t regs_crc;                 // this module's own
+} PresetLoaded;
+
+/** @return false, leaving *out alone, if nothing is loaded. */
+bool presets_loaded_info(PresetLoaded *out);
+
+#ifdef FDA_MODE
+static inline bool presets_locked(void) { return true; }
+static inline void presets_lock(void) { }
+#else
+/** Is the lock on? Always, in FDA_MODE. */
+bool presets_locked(void);
+/** Turn the lock on, until the next reset. */
+void presets_lock(void);
+#endif
+
 // A reading older than this counts as no reading: a sensor that stops
 // answering must not leave a run going on its last value.
 #define PRESET_TEMP_MAX_AGE_MS 3000u
@@ -210,7 +258,7 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size);
  */
 bool presets_thermal_trip(void);
 
-#ifdef PRESET_MODE
+#ifdef PRESET_STORE
 
 /** Slots that hold nothing: neither a preset nor the second half of one. */
 uint8_t presets_free_slots(void);
@@ -243,8 +291,6 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc);
  */
 uint8_t presets_delete(uint8_t slot);
 
-#endif /* PRESET_MODE */
-
-#endif /* PRESETS_ENABLED */
+#endif /* PRESET_STORE */
 
 #endif /* INC_PRESETS_H_ */
