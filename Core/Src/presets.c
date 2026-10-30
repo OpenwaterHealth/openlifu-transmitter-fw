@@ -1,7 +1,5 @@
 #include "presets.h"
 
-#ifdef PRESETS_ENABLED
-
 #include "common.h"
 #include "if_commands.h"
 #include "module_manager.h"
@@ -13,7 +11,7 @@
 #include <string.h>
 
 #include "memory_map.h"
-#ifdef PRESET_MODE
+#ifdef PRESET_STORE
 #include "flash_eeprom.h"
 #endif
 
@@ -25,9 +23,12 @@ extern TX7332 transmitters[TX_PER_MODULE];
 static bool preset_loaded = false;
 static int16_t loaded_start_c_x10 = 0;
 static int16_t loaded_shutoff_c_x10 = 0;
-#ifdef PRESET_MODE
-// Which slot that was, so storing over it unloads it.
-static uint8_t loaded_index = 0;
+// Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it,
+// and storing over its slot unloads it.
+static PresetLoaded loaded;
+
+#ifndef FDA_MODE
+static bool locked = false;
 #endif
 
 // Where one preset's blob is, and how long.
@@ -135,7 +136,7 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	return c.p == c.end;
 }
 
-#ifdef PRESET_MODE
+#ifndef FDA_MODE
 
 _Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESETS_SIZE,
                "the slots must fill the reserved pages exactly");
@@ -192,7 +193,7 @@ static bool slot_blob(uint8_t slot, PresetBlob *out)
 	return true;
 }
 
-#else /* PRESET_MODE */
+#else /* FDA_MODE */
 
 // The one preset, from the SDK. The linker puts it at the start of the
 // FDA_PRESET region; it is read from there, so what runs is what was flashed.
@@ -210,12 +211,12 @@ static bool fda_blob(PresetBlob *out)
 	return true;
 }
 
-#endif /* PRESET_MODE */
+#endif /* FDA_MODE */
 
 uint8_t presets_slot_state(uint8_t slot)
 {
 	if (slot >= PRESET_COUNT) return OW_INVALID_PACKET;
-#ifdef PRESET_MODE
+#ifndef FDA_MODE
 	bool tail;
 	if (slot_len(slot, &tail) != 0U) return OW_SUCCESS;
 	return tail ? OW_PRESET_SLOT_TAIL : OW_PRESET_EMPTY;
@@ -225,7 +226,7 @@ uint8_t presets_slot_state(uint8_t slot)
 #endif
 }
 
-#ifdef PRESET_MODE
+#ifdef PRESET_STORE
 
 // The upload in progress; one at a time, and offset 0 starts over.
 static uint8_t stage[PRESET_BLOB_MAX];
@@ -243,7 +244,7 @@ static bool blob_valid(const uint8_t *data, uint32_t len)
 // among them, nothing counts as loaded until the next load.
 static void slots_changing(uint8_t first, uint8_t count)
 {
-	if (preset_loaded && loaded_index >= first && (uint8_t)(loaded_index - first) < count) {
+	if (preset_loaded && loaded.index >= first && (uint8_t)(loaded.index - first) < count) {
 		preset_loaded = false;
 	}
 }
@@ -324,7 +325,7 @@ uint8_t presets_delete(uint8_t slot)
 	return OW_SUCCESS;
 }
 
-#endif /* PRESET_MODE */
+#endif /* PRESET_STORE */
 
 uint8_t presets_count(void)
 {
@@ -334,7 +335,7 @@ uint8_t presets_count(void)
 bool presets_get(uint8_t index, Preset *out)
 {
 	PresetBlob blob;
-#ifdef PRESET_MODE
+#ifndef FDA_MODE
 	if (index >= PRESET_COUNT || !slot_blob(index, &blob)) return false;
 #else
 	if (index != 0U || !fda_blob(&blob)) return false;
@@ -491,9 +492,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		return false;
 	}
 
-	// The preset owns its sequence timing and its run-length choices, so the
-	// preset builds refuse SET_SWTRIG (which would also clear the profile
-	// cycle installed above).
+	// The preset owns its sequence timing and its run-length choices: the
+	// lock refuses SET_SWTRIG, and unlocked it unloads the preset (it would
+	// also clear the profile cycle installed above).
 	uint32_t trains = presets_train_count(&preset, (uint8_t)duration_index);
 	if (!trigger_set_config(preset.trig_frequency_hz,
 	                        PRESET_TRIGGER_PULSE_WIDTH_US,
@@ -511,12 +512,47 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 
 	loaded_start_c_x10 = preset.start_c_x10;
 	loaded_shutoff_c_x10 = preset.shutoff_c_x10;
-#ifdef PRESET_MODE
-	loaded_index = index;
-#endif
+	loaded.index = index;
+	loaded.duration_index = (uint8_t)duration_index;
+	loaded.train_count = trains;
+	loaded.settings_crc = preset.settings_crc;
+	loaded.regs_crc = crc;
 	preset_loaded = true;
 	return true;
 }
+
+bool presets_raw_write(bool here)
+{
+	// A raw write while nothing is loaded is the research case: let it be.
+	if (!preset_loaded) return true;
+	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	if (here) preset_loaded = false;
+	return true;
+}
+
+bool presets_loaded(void)
+{
+	return preset_loaded;
+}
+
+bool presets_loaded_info(PresetLoaded *out)
+{
+	if (!preset_loaded) return false;
+	*out = loaded;
+	return true;
+}
+
+#ifndef FDA_MODE
+bool presets_locked(void)
+{
+	return locked;
+}
+
+void presets_lock(void)
+{
+	locked = true;
+}
+#endif
 
 static bool temperature_fresh(void)
 {
@@ -579,5 +615,3 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	if (len < 0) return 0U;
 	return (len >= (int)size) ? (uint16_t)(size - 1U) : (uint16_t)len;
 }
-
-#endif /* PRESETS_ENABLED */
