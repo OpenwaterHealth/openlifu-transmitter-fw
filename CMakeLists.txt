@@ -143,6 +143,15 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # bootloader's slot still covers pages 110-125.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
 
+# A presets-only (FDA_MODE) image reports which preset set it carries:
+# "fda" (the released preset) or "test" (the test presets). It must match a
+# preset context in openlifu-diathermy-application.
+set(FW_PRESET_VARIANT "fda" CACHE STRING "Preset set in a presets-only image: fda or test")
+set_property(CACHE FW_PRESET_VARIANT PROPERTY STRINGS fda test)
+if(NOT FW_PRESET_VARIANT MATCHES "^(fda|test)$")
+    message(FATAL_ERROR "FW_PRESET_VARIANT must be fda or test, not '${FW_PRESET_VARIANT}'.")
+endif()
+
 if(FDA_MODE)
     set(FDA_PRESET_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/fda_preset.h")
     if(NOT EXISTS "${FDA_PRESET_HEADER}")
@@ -150,19 +159,24 @@ if(FDA_MODE)
                             "examples/generate_presets.py.")
     endif()
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
-    set(FW_BUILD_VARIANT "fda")
+    set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 
     message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
 else()
-    set(FW_BUILD_VARIANT "dev")
+    set(FW_BUILD_VARIANT "")
     message(STATUS "FDA mode    : OFF (DEV: host control, preset slots, runtime lock)")
 endif()
 
-# OW_CMD_VERSION returns FW_VERSION. The "+<variant>" suffix (semver build
-# metadata) lets the host tell an FDA image ("fda") from a DEV image ("dev")
-# of the same commit without writing to the device. Whether a DEV image is
-# locked is runtime state: OW_PRESET_LOCK reports it.
-set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+# OW_CMD_VERSION returns FW_VERSION. A presets-only image appends
+# "+<FW_PRESET_VARIANT>" (semver build metadata), so the host can tell which
+# preset set it carries without writing to the device. Any other build has no
+# suffix: all commands are enabled and the host treats it as a development or
+# service image.
+if(FW_BUILD_VARIANT)
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+else()
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}")
+endif()
 
 message(STATUS "FW version   : ${FW_VERSION_STRING}")
 message(STATUS "FW git sha   : ${FW_GIT_SHA}")
