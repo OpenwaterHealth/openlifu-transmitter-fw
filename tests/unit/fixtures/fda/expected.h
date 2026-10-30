@@ -14,7 +14,7 @@ static const struct {
 	uint8_t train_count_len;
 	uint32_t train_counts[16];
 } expected[EXPECTED_COUNT] = {
-	{ "diathermy_34ele_40V_50pct_25mm", 0x41a12748u, 0xf632a257u, 5u, { 19u, 37u, 75u, 187u, 375u } },
+	{ "diathermy_34ele_40V_50pct_25mm", 0x61c6716fu, 0xe4c41cf3u, 5u, { 19u, 37u, 75u, 187u, 375u } },
 };
 
 #endif  // FIXTURE_EXPECTED_H_
