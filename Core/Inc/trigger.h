@@ -15,7 +15,8 @@ typedef enum {
 	TRIGGER_STATUS_RUNNING = 1,
 	TRIGGER_STATUS_ERROR = 2,
 	TRIGGER_STATUS_NOT_CONFIGURED = 3,
-	TRIGGER_STATUS_PAUSED = 4     // between trains of a sequence, resumable
+	TRIGGER_STATUS_PAUSED = 4,    // between trains of a sequence, resumable
+	TRIGGER_STATUS_TIMEOUT = 5    // the treatment timeout ended it; STOP clears it
 } TriggerStatus;
 
 typedef enum {
@@ -31,11 +32,6 @@ typedef enum {
 	AUTO_CYCLE_RUNNING = 1,
 	AUTO_CYCLE_ERROR = 2
 } AutoCycleState_e;
-
-// A pause not resumed within this ends the sequence (main loop, 1 s resolution).
-#ifndef TRIGGER_PAUSE_TIMEOUT_S
-#define TRIGGER_PAUSE_TIMEOUT_S (30U * 60U)
-#endif
 
 // 1ms window reserved for allowing the profile switch to happen
 // in-between trigger pulses. Measured SPI write for all apods + profiles
@@ -79,7 +75,12 @@ void trigger_register_interlock(void);
 // train runs out instead. Resume withdraws a pause that has not landed yet.
 bool pause_trigger_pulse(void);
 bool resume_trigger_pulse(void);
-bool trigger_pause_expired(void);
+// Treatment timeout (SR-024): total time since START, paused time included.
+// 0 disables it; a preset load sets it from the preset.
+void trigger_set_timeout_s(uint32_t timeout_s);
+bool trigger_timeout_expired(void);
+// After stop_sequence() on expiry: TIMEOUT until STOP, unless every train was out.
+void trigger_end_timeout(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
@@ -114,5 +115,6 @@ __weak void pulse_complete_callback(uint32_t curr_count, uint32_t total_count);
 __weak void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count);
 __weak void sequence_complete_callback(uint32_t total_count) ;
 __weak void sequence_paused_callback(uint32_t curr_count, uint32_t total_count);
+__weak void sequence_timeout_callback(uint32_t curr_count, uint32_t total_count);
 
 #endif /* __TRIGGER_H */
