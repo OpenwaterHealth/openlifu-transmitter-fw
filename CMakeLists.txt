@@ -52,15 +52,7 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-message(STATUS "FW version   : ${FW_GIT_DESCRIBE}")
-message(STATUS "FW git sha   : ${FW_GIT_SHA}")
-message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
-
-configure_file(
-    ${CMAKE_SOURCE_DIR}/version.h.in
-    ${CMAKE_BINARY_DIR}/generated/version.h
-    @ONLY
-)
+# version.h is configured below, once FDA_MODE sets the build variant.
 
 # Set the project name
 set(CMAKE_PROJECT_NAME lifu-transmitter-fw)
@@ -132,43 +124,85 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/utils.c
     Core/Src/demo.c
     Core/Src/presets.c
+    Core/Src/preset_policy.c
 )
 
 # ---------------------------
 # FDA mode
 # ---------------------------
-# In both preset modes the firmware programs the TX7332 chips from a preset
-# and refuses host register writes (Core/Inc/presets.h).
+# Two builds (Core/Inc/presets.h):
 #
-# FDA_MODE links one read-only preset into the end of the bootloader's slot,
-# pages 124-125. Its header, Core/Inc/presets/fda_preset.h, comes from the
-# openlifu SDK's examples/generate_presets.py.
+# FDA_MODE is the presets-only image: it links its presets in and is always
+# preset-locked, so the host loads a preset and can change nothing else. The
+# openlifu SDK generates the presets into Core/Inc/presets/, and the tree
+# holds one of:
+#   fda_preset.h    one preset, at the end of the bootloader's slot (pages
+#                   124-125); generate_fda_preset
+#   preset_table.h  a set of presets, as const data in the image
+#                   (PRESET_TABLE); generate_preset_set
 #
-# PRESET_MODE keeps writable presets in pages 110-125. It needs the bootloader
-# whose slot ends at page 109.
+# Every other build is DEV: full host control, presets in pages 110-125, and
+# a runtime lock (OW_PRESET_LOCK) that refuses what FDA_MODE refuses until the
+# next reset. Only a bare-metal DEV image can store presets, since the
+# bootloader's slot still covers pages 110-125.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
-option(PRESET_MODE "Writable presets in pages 110-125" OFF)
 
-if(FDA_MODE AND PRESET_MODE)
-    message(FATAL_ERROR "FDA_MODE and PRESET_MODE cannot both be ON.")
+# A presets-only (FDA_MODE) image reports which preset set it carries:
+# "fda" (the released preset) or "test" (the test presets). It must match a
+# preset context in openlifu-diathermy-application.
+set(FW_PRESET_VARIANT "fda" CACHE STRING "Preset set in a presets-only image: fda or test")
+set_property(CACHE FW_PRESET_VARIANT PROPERTY STRINGS fda test)
+if(NOT FW_PRESET_VARIANT MATCHES "^(fda|test)$")
+    message(FATAL_ERROR "FW_PRESET_VARIANT must be fda or test, not '${FW_PRESET_VARIANT}'.")
 endif()
 
 if(FDA_MODE)
     set(FDA_PRESET_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/fda_preset.h")
-    if(NOT EXISTS "${FDA_PRESET_HEADER}")
-        message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER}: generate it with the openlifu SDK's "
-                            "examples/generate_presets.py.")
+    set(PRESET_TABLE_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/preset_table.h")
+    if(EXISTS "${FDA_PRESET_HEADER}" AND EXISTS "${PRESET_TABLE_HEADER}")
+        message(FATAL_ERROR "FDA_MODE found both ${FDA_PRESET_HEADER} and ${PRESET_TABLE_HEADER}: "
+                            "keep only the preset set this image is for.")
+    elseif(EXISTS "${PRESET_TABLE_HEADER}")
+        # The fda set is the one released preset; a set of several is never it.
+        if(FW_PRESET_VARIANT STREQUAL "fda")
+            message(FATAL_ERROR "FW_PRESET_VARIANT=fda links one preset (fda_preset.h), "
+                                "not ${PRESET_TABLE_HEADER}.")
+        endif()
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESET_TABLE)
+        message(STATUS "FDA mode    : ON (preset set from preset_table.h, always locked)")
+    elseif(EXISTS "${FDA_PRESET_HEADER}")
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
+        message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
+    else()
+        message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER} or ${PRESET_TABLE_HEADER}: generate "
+                            "them with the openlifu SDK (generate_fda_preset / generate_preset_set).")
     endif()
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
-
-    message(STATUS "FDA mode    : ON (preset at pages 124-125)")
-elseif(PRESET_MODE)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
-
-    message(STATUS "Preset mode : ON (presets in flash slots)")
+    set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 else()
-    message(STATUS "FDA mode    : OFF (host owns the TX7332 registers)")
+    set(FW_BUILD_VARIANT "")
+    message(STATUS "FDA mode    : OFF (DEV: host control, preset slots, runtime lock)")
 endif()
+
+# OW_CMD_VERSION returns FW_VERSION. A presets-only image appends
+# "+<FW_PRESET_VARIANT>" (semver build metadata), so the host can tell which
+# preset set it carries without writing to the device. Any other build has no
+# suffix: all commands are enabled and the host treats it as a development or
+# service image.
+if(FW_BUILD_VARIANT)
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+else()
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}")
+endif()
+
+message(STATUS "FW version   : ${FW_VERSION_STRING}")
+message(STATUS "FW git sha   : ${FW_GIT_SHA}")
+message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/version.h.in
+    ${CMAKE_BINARY_DIR}/generated/version.h
+    @ONLY
+)
 
 if(DEBUG_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/logging.c)

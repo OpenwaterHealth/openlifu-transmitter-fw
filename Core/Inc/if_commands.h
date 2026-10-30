@@ -30,7 +30,7 @@ uint8_t stop_sequence(void);
 bool apply_next_profile_in_cycle(void);
 void reset_profile_cycle_to_start(void);
 
-// FDA mode (presets.c): install an execution order that was computed at build
+// Loading a preset (presets.c): install an execution order that was computed at build
 // time, instead of the one the host used to push with OW_CTRL_SET_PROFILE_CYCLE.
 bool profile_cycle_install(uint8_t profile_count, const uint8_t *order, uint8_t len);
 
