@@ -132,10 +132,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # ---------------------------
 # Two builds (Core/Inc/presets.h):
 #
-# FDA_MODE links one read-only preset into the end of the bootloader's slot,
-# pages 124-125, and is always preset-locked: the host loads the preset and
-# can change nothing else. Its header, Core/Inc/presets/fda_preset.h, comes
-# from the openlifu SDK's examples/generate_presets.py.
+# FDA_MODE is the presets-only image: it links its presets in and is always
+# preset-locked, so the host loads a preset and can change nothing else. The
+# openlifu SDK generates the presets into Core/Inc/presets/, and the tree
+# holds one of:
+#   fda_preset.h    one preset, at the end of the bootloader's slot (pages
+#                   124-125); generate_fda_preset
+#   preset_table.h  a set of presets, as const data in the image
+#                   (PRESET_TABLE); generate_preset_set
 #
 # Every other build is DEV: full host control, presets in pages 110-125, and
 # a runtime lock (OW_PRESET_LOCK) that refuses what FDA_MODE refuses until the
@@ -154,14 +158,26 @@ endif()
 
 if(FDA_MODE)
     set(FDA_PRESET_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/fda_preset.h")
-    if(NOT EXISTS "${FDA_PRESET_HEADER}")
-        message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER}: generate it with the openlifu SDK's "
-                            "examples/generate_presets.py.")
+    set(PRESET_TABLE_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/preset_table.h")
+    if(EXISTS "${FDA_PRESET_HEADER}" AND EXISTS "${PRESET_TABLE_HEADER}")
+        message(FATAL_ERROR "FDA_MODE found both ${FDA_PRESET_HEADER} and ${PRESET_TABLE_HEADER}: "
+                            "keep only the preset set this image is for.")
+    elseif(EXISTS "${PRESET_TABLE_HEADER}")
+        # The fda set is the one released preset; a set of several is never it.
+        if(FW_PRESET_VARIANT STREQUAL "fda")
+            message(FATAL_ERROR "FW_PRESET_VARIANT=fda links one preset (fda_preset.h), "
+                                "not ${PRESET_TABLE_HEADER}.")
+        endif()
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESET_TABLE)
+        message(STATUS "FDA mode    : ON (preset set from preset_table.h, always locked)")
+    elseif(EXISTS "${FDA_PRESET_HEADER}")
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
+        message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
+    else()
+        message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER} or ${PRESET_TABLE_HEADER}: generate "
+                            "them with the openlifu SDK (generate_fda_preset / generate_preset_set).")
     endif()
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
     set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
-
-    message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
 else()
     set(FW_BUILD_VARIANT "")
     message(STATUS "FDA mode    : OFF (DEV: host control, preset slots, runtime lock)")
