@@ -1,7 +1,8 @@
-"""An FDA image refuses DFU entry and raw I2C to the module bootloaders (SR-021).
+"""A presets-only image refuses DFU entry and raw I2C to the module bootloaders (SR-021).
 
-Bench step 4.06. FDA images only: on a DEV image these commands would run, and
-DFU would drop the board into its bootloader, so every test here skips there.
+Bench steps 4.06 (+fda) and 4.08b (+test). Presets-only images only: on a DEV
+image these commands would run, and DFU would drop the board into its
+bootloader, so every test here skips there.
 The locked-DEV equivalents are in test_preset_lock.py. Keep the console HV off.
 
 The last test resets the transmitter and reconnects.
@@ -10,7 +11,7 @@ The last test resets the transmitter and reconnects.
 import time
 
 import pytest
-from conftest import send_raw
+from conftest import PRESETS_ONLY, send_raw
 from openlifu_sdk.io.LIFUConfig import (
     OW_CMD,
     OW_CMD_DFU,
@@ -33,34 +34,34 @@ RECONNECT_TIMEOUT_S = 20.0
 
 
 @pytest.fixture(autouse=True)
-def fda_only(variant):
-    if variant != "fda":
-        pytest.skip("FDA image only: a DEV image would run these")
+def presets_only(variant):
+    if variant not in PRESETS_ONLY:
+        pytest.skip("presets-only (+fda / +test) images only: a DEV image would run these")
 
 
-def _assert_refused_and_still_running(txdevice, r):
+def _assert_refused_and_still_running(txdevice, variant, r):
     assert r is not None, "no reply"
     assert (r.packet_type, r.reserved) == (OW_ERROR, OW_FDA_REFUSED)
     # Still the application, not a bootloader.
     assert txdevice.ping()
-    assert txdevice.get_version().endswith("+fda")
+    assert txdevice.get_version().endswith("+" + variant)
 
 
 @pytest.mark.parametrize("reserved", [0x00, 0x77])
 @pytest.mark.parametrize("addr", [0, 1], ids=["master", "module1"])
 @pytest.mark.parametrize("packet_type", [OW_CMD, OW_CONTROLLER], ids=["CMD", "CONTROLLER"])
-def test_dfu_is_refused(txdevice, packet_type, addr, reserved):
+def test_dfu_is_refused(txdevice, variant, packet_type, addr, reserved):
     r = send_raw(txdevice, packet_type, OW_CMD_DFU, addr=addr, reserved=reserved)
-    _assert_refused_and_still_running(txdevice, r)
+    _assert_refused_and_still_running(txdevice, variant, r)
 
 
 @pytest.mark.parametrize("reserved", [0x00, 0x77])
-def test_one_wire_dfu_is_refused(txdevice, reserved):
+def test_one_wire_dfu_is_refused(txdevice, variant, reserved):
     r = send_raw(txdevice, OW_ONE_WIRE, OW_CMD_DFU, reserved=reserved)
-    _assert_refused_and_still_running(txdevice, r)
+    _assert_refused_and_still_running(txdevice, variant, r)
 
 
-def test_i2c_passthrough_to_the_module_bootloader_is_refused(txdevice):
+def test_i2c_passthrough_to_the_module_bootloader_is_refused(txdevice, variant):
     r = send_raw(
         txdevice,
         OW_I2C_PASSTHRU,
@@ -69,10 +70,10 @@ def test_i2c_passthrough_to_the_module_bootloader_is_refused(txdevice):
         reserved=1,
         data=bytearray(BOOTLOADER_GET),
     )
-    _assert_refused_and_still_running(txdevice, r)
+    _assert_refused_and_still_running(txdevice, variant, r)
 
 
-def test_reset_still_works_after_the_refusals(txdevice):
+def test_reset_still_works_after_the_refusals(txdevice, variant):
     r = send_raw(txdevice, OW_CMD, OW_CMD_RESET)
     assert r is not None and r.packet_type != OW_ERROR, "reset refused"
 
@@ -85,4 +86,4 @@ def test_reset_still_works_after_the_refusals(txdevice):
         time.sleep(0.5)
 
     assert txdevice.ping()
-    assert txdevice.get_version().endswith("+fda"), "did not come back as the FDA image"
+    assert txdevice.get_version().endswith("+" + variant), f"did not come back as +{variant}"

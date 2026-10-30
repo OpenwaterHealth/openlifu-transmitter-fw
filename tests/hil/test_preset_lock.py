@@ -11,6 +11,7 @@ import pytest
 from conftest import (
     OW_PRESET_LOCK,
     PRESET_INDEX,
+    PRESETS_ONLY,
     loaded,
     lock_state,
     send_raw,
@@ -50,7 +51,7 @@ def _trigger_json(txdevice) -> bytearray:
 
 def test_dev_starts_unlocked(txdevice, variant):
     if variant != "dev":
-        pytest.skip("FDA images are always locked")
+        pytest.skip("presets-only images are always locked")
     assert lock_state(txdevice) == 0, "reset the DEV image before this run"
 
 
@@ -137,8 +138,8 @@ def test_the_lock_turns_on_and_stays_on(txdevice, preset_in_slot):
 def test_locked_refuses_what_fda_refuses(
     txdevice, variant, locked, packet_type, command, reserved, data, code
 ):
-    if variant == "fda" and command in (OW_PRESET_WRITE, OW_PRESET_COMMIT, OW_PRESET_DELETE):
-        pytest.skip("the FDA image has no stored presets")
+    if variant in PRESETS_ONLY and command in (OW_PRESET_WRITE, OW_PRESET_COMMIT, OW_PRESET_DELETE):
+        pytest.skip("a presets-only image has no stored presets")
     r = send_raw(
         txdevice, packet_type, command, reserved=reserved, data=bytearray(data) if data else None
     )
