@@ -52,7 +52,7 @@
             "name": "Debug-FDA",
             "inherits": "default",
             "displayName": "Debug (FDA mode)",
-            "description": "One preset, read-only, linked in at pages 108-109 (Core/Inc/presets/fda_preset.h from the SDK's generate_presets.py). The user config is read-only and host register writes are refused.",
+            "description": "Presets-only: the presets are linked in, read-only. One preset at pages 108-109 (Core/Inc/presets/fda_preset.h), or a set (Core/Inc/presets/preset_table.h, the SDK's generate_preset_set). FW_PRESET_VARIANT (fda or test) names the set. The user config is read-only and host register writes are refused.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "FDA_MODE": "ON"
@@ -62,7 +62,7 @@
             "name": "Release-FDA",
             "inherits": "default",
             "displayName": "Release (FDA mode)",
-            "description": "One preset, read-only, linked in at pages 108-109 (Core/Inc/presets/fda_preset.h from the SDK's generate_presets.py). The user config is read-only and host register writes are refused.",
+            "description": "Presets-only: the presets are linked in, read-only. One preset at pages 108-109 (Core/Inc/presets/fda_preset.h), or a set (Core/Inc/presets/preset_table.h, the SDK's generate_preset_set). FW_PRESET_VARIANT (fda or test) names the set. The user config is read-only and host register writes are refused.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "FDA_MODE": "ON"
@@ -72,7 +72,7 @@
             "name": "Release-FDA-BareMetal",
             "inherits": "default",
             "displayName": "Release (FDA mode, bare metal)",
-            "description": "Release-FDA without the bootloader, for bench work. FLASH @ 0x08000000, the preset at the same pages 108-109.",
+            "description": "Release-FDA without the bootloader, for bench work. FLASH @ 0x08000000, the presets where Release-FDA links them.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "BARE_METAL": "ON",
