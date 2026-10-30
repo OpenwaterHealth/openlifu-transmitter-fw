@@ -14,7 +14,19 @@
 // Internal state variables
 static volatile uint32_t _pulseCount = 0;
 static volatile uint32_t _trainCount = 0;
-static volatile bool _stop_pending = false;
+
+// What TRIG_ONESHOT_IRQHandler does once the pulse in flight ends.
+#define END_NONE     0
+#define END_SEQUENCE 1
+#define END_PAUSE    2
+static volatile uint8_t _end_action = END_NONE;
+
+// Pause/resume. While paused _trainCount is the trains delivered; the gap the
+// last one owed is taken from the pause before the next train may start.
+static volatile bool _pause_pending = false;
+static volatile bool _resume_wait = false;   // HIRES is running out that gap
+static volatile uint32_t _gap_elapsed_us = 0;  // of the last train's period, at the pause
+static volatile uint32_t _paused_tick = 0;
 
 static volatile OW_TimerData _timerDataConfig = {
 		.TriggerFrequencyHz = 0,
@@ -86,7 +98,8 @@ static void timerDataToJson(char *jsonString, size_t max_length)
 			  _timerDataConfig.ProfileIndex,
 			  _timerDataConfig.ProfileIncrement,
 			  (unsigned long)_trainCount,
-			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING ? "RUNNING" : "STOPPED");
+			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING ? "RUNNING" :
+			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ? "PAUSED" : "STOPPED");
 }
 
 static int jsonToTimerData(const char *jsonString)
@@ -301,6 +314,9 @@ void print_OW_TimerData(const OW_TimerData *data) {
     	break;
     case TRIGGER_STATUS_ERROR:
         printf("TriggerStatus: ERROR\r\n");
+    	break;
+    case TRIGGER_STATUS_PAUSED:
+        printf("TriggerStatus: PAUSED\r\n");
     	break;
     default:
         printf("TriggerStatus: NOT_CONFIGURED\r\n");
@@ -523,6 +539,42 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
     }
 }
 
+// Configures and clears the timers and arms the one-shot; the caller starts
+// LORES (the pulses) and HIRES (the train period).
+static void arm_trigger_timers(void)
+{
+    _end_action = END_NONE;
+    _pause_pending = false;
+    _resume_wait = false;
+    __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
+    cancel_profile_action();
+
+    Configure_ONESHOT_Timer(&TRIGGER_TIMER, _timerDataConfig.TriggerPulseWidthUsec);
+    Configure_TIMERS_Frequency(&LORES_TIMER, _timerDataConfig.TriggerFrequencyHz, false);
+
+    __HAL_TIM_DISABLE(&HIRES_TIMER);
+    __HAL_TIM_SET_COUNTER(&HIRES_TIMER, 0);
+
+    HIRES_TIMER.Instance->ARR = _timerDataConfig.TriggerPulseTrainInterval - 1;
+
+    // Clear interrupt flags
+    __HAL_TIM_CLEAR_FLAG(&HIRES_TIMER, TIM_FLAG_UPDATE);
+    __HAL_TIM_CLEAR_FLAG(&LORES_TIMER, TIM_FLAG_UPDATE);
+
+    // Fix for the one-shot ignoring the first trigger and skipping the first pulse.
+    // Force it idle because the LORES update event above may have trigger-started it.
+    __HAL_TIM_DISABLE(&TRIGGER_TIMER);
+    __HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
+    __HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_UPDATE);
+    __HAL_TIM_SET_COUNTER(&LORES_TIMER, 0);
+    __HAL_TIM_SET_COUNTER(&HIRES_TIMER, 0);
+
+    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
+    __HAL_TIM_ENABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
+
+    HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
+}
+
 uint8_t start_trigger_pulse(void) {
     if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY) return _timerDataConfig.TriggerStatus;
 
@@ -554,39 +606,10 @@ uint8_t start_trigger_pulse(void) {
 
     _pulseCount = 0;
     _trainCount = 0;
-    _stop_pending = false;
-    __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
-    cancel_profile_action();
+    arm_trigger_timers();
 
-    Configure_ONESHOT_Timer(&TRIGGER_TIMER, _timerDataConfig.TriggerPulseWidthUsec);
-    Configure_TIMERS_Frequency(&LORES_TIMER, _timerDataConfig.TriggerFrequencyHz, false);
-
-    __HAL_TIM_DISABLE(&HIRES_TIMER);
-    __HAL_TIM_SET_COUNTER(&HIRES_TIMER, 0);
-
-    HIRES_TIMER.Instance->ARR = _timerDataConfig.TriggerPulseTrainInterval - 1;
-
-    // Clear interrupt flags
-    __HAL_TIM_CLEAR_FLAG(&HIRES_TIMER, TIM_FLAG_UPDATE);
-    __HAL_TIM_CLEAR_FLAG(&LORES_TIMER, TIM_FLAG_UPDATE);
-
-    // Fix for the one-shot ignoring the first trigger and skipping the first pulse.
-    // Force it idle because the LORES update event above may have trigger-started it.
-    __HAL_TIM_DISABLE(&TRIGGER_TIMER);
-    __HAL_TIM_SET_COUNTER(&TRIGGER_TIMER, 0);
-    __HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_UPDATE);
-    __HAL_TIM_SET_COUNTER(&LORES_TIMER, 0);
-    __HAL_TIM_SET_COUNTER(&HIRES_TIMER, 0);
-
-    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
-    __HAL_TIM_ENABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
-
-
-    // Start PWM
-    HAL_TIM_PWM_Start(&TRIGGER_TIMER, TIM_CHANNEL_2);
     HAL_TIM_Base_Start_IT(&LORES_TIMER);
     if(_timerDataConfig.TriggerPulseTrainInterval>0) {
-        __HAL_TIM_ENABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
         HAL_TIM_Base_Start_IT(&HIRES_TIMER);
     }
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_RUNNING;
@@ -596,11 +619,18 @@ uint8_t start_trigger_pulse(void) {
 uint8_t stop_trigger_pulse(void) {
     // Disarm before doing anything to avoid race condition - if there 
 	// is a forced stop (overheat, STOP command) from the main loop while 
-	// stop_after_final_pulse() has armed the TRIGGER_TIMER update interrupt, 
+	// end_after_final_pulse() has armed the TRIGGER_TIMER update interrupt, 
 	// the ISR could run finish_sequence() mid-stop and report a completed sequence.
     __HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
-    _stop_pending = false;
+    _end_action = END_NONE;
+    _pause_pending = false;
+    _resume_wait = false;
 
+	// Paused: the timers are already stopped and the pin parked.
+	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED) {
+		_timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
+		return TRIGGER_STATUS_READY;
+	}
 	if(_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING) return _timerDataConfig.TriggerStatus;
 
     HAL_TIM_PWM_Stop(&TRIGGER_TIMER, TIM_CHANNEL_2);
@@ -631,32 +661,159 @@ void trigger_register_interlock(void)
 
 static void finish_sequence(void)
 {
-	stop_trigger_pulse(); // disables update interrupt and clears _stop_pending
+	stop_trigger_pulse(); // disables update interrupt and clears _end_action
 	sequence_complete_callback(_timerDataConfig.TriggerPulseTrainCount);
+}
+
+static void finish_pause(void)
+{
+	stop_trigger_pulse();
+	// Resume starts it again, from the first profile.
+	auto_cycle_stop();
+	_paused_tick = HAL_GetTick();
+	_timerDataConfig.TriggerStatus = TRIGGER_STATUS_PAUSED;
+	sequence_paused_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
 }
 
 // The ISRs fire as soon as the last pulse starts. 
 // If we stop the PWM there the pulse is truncated and the line is
 // left floating. Since the one-shot re-arms itself it's not stopped mid-run
 // on purpose. Instead, this arms the end-of-cycle update interrupt and then
-// TRIG_ONESHOT_IRQHandler handles the stop/park.
-static void stop_after_final_pulse(void)
+// TRIG_ONESHOT_IRQHandler runs `action`. Returns true, with nothing armed, if
+// the pulse has already ended: the caller runs it now.
+static bool end_after_final_pulse(uint8_t action)
 {
-	_stop_pending = true;
+	_end_action = action;
 	__HAL_TIM_CLEAR_FLAG(&TRIGGER_TIMER, TIM_FLAG_UPDATE);
 	__HAL_TIM_ENABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
-	// Pulse already finished, so wrap things up now. finish_sequence() will
-	// disable the interrupt so if a completion occurs between the clear and enable above, 
-	// the ISR is handled correctly.
-	if (!(TRIGGER_TIMER.Instance->CR1 & TIM_CR1_CEN)) finish_sequence();
+	if (TRIGGER_TIMER.Instance->CR1 & TIM_CR1_CEN) return false;
+	// It may have ended between the clear and the enable: disarm, so the ISR can't run it too.
+	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
+	_end_action = END_NONE;
+	return true;
 }
 
-// TRIGGER_TIMER update: only armed by stop_after_final_pulse(), so this is the
-// sequence's final pulse finishing. Routed from HAL_TIM_PeriodElapsedCallback.
+static void stop_after_final_pulse(void)
+{
+	if (end_after_final_pulse(END_SEQUENCE)) finish_sequence();
+}
+
+// TRIGGER_TIMER update: only armed by end_after_final_pulse(), so this is the
+// final pulse of the sequence, or of the train a pause ends, finishing.
+// Routed from HAL_TIM_PeriodElapsedCallback.
 void TRIG_ONESHOT_IRQHandler(void)
 {
 	__HAL_TIM_DISABLE_IT(&TRIGGER_TIMER, TIM_IT_UPDATE);
-	if (_stop_pending) finish_sequence();
+	uint8_t action = _end_action;
+	_end_action = END_NONE;
+	if (action == END_SEQUENCE) finish_sequence();
+	else if (action == END_PAUSE) finish_pause();
+}
+
+static void start_next_train(void)
+{
+    // Reset pulse-level profile cycling for the new pulse train
+    if (_auto_cycle.is_active) {
+        _auto_cycle.pulse_counter_in_profile = 0;
+        schedule_profile_action(PROFILE_ACTION_RESET);
+    }
+
+    _pulseCount = 0;
+    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
+    HAL_TIM_Base_Start_IT(&LORES_TIMER);
+
+    if(_timerDataConfig.TriggerPulseTrainInterval>0) {
+        __HAL_TIM_ENABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
+        HAL_TIM_Base_Start_IT(&HIRES_TIMER);
+    }
+}
+
+// The current train's pulses are out and HIRES is running its gap: end the
+// train here. False on the final train, whose gap ends the sequence instead.
+static bool pause_in_gap(void)
+{
+	_pause_pending = false;
+	// A resume running out the gap it owes has already counted that train.
+	if (!_resume_wait) {
+		if (_trainCount + 1U >= _timerDataConfig.TriggerPulseTrainCount) return false;
+		_trainCount++;
+	}
+	_resume_wait = false;
+	_gap_elapsed_us = __HAL_TIM_GET_COUNTER(&HIRES_TIMER);
+	__HAL_TIM_DISABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
+	HAL_TIM_Base_Stop_IT(&HIRES_TIMER);
+	return true;
+}
+
+bool pause_trigger_pulse(void)
+{
+	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED) return true;
+	if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_RUNNING ||
+	    _timerDataConfig.TriggerMode != TRIGGER_MODE_SEQUENCE) return false;
+
+	bool now = false;
+	__disable_irq();
+	// LORES idle with a train period set means a gap: nothing of the train is left.
+	if (_timerDataConfig.TriggerPulseTrainInterval > 0U &&
+	    !(LORES_TIMER.Instance->CR1 & TIM_CR1_CEN) && _end_action == END_NONE) {
+		if (pause_in_gap()) now = end_after_final_pulse(END_PAUSE);
+	} else {
+		_pause_pending = true;
+	}
+	__enable_irq();
+
+	// With the IRQs back on: the async report waits on the USB interrupt.
+	if (now) finish_pause();
+	return true;
+}
+
+bool resume_trigger_pulse(void)
+{
+	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING) {
+		__disable_irq();
+		bool withdrawn = _pause_pending;
+		_pause_pending = false;
+		__enable_irq();
+		return withdrawn;
+	}
+	if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_PAUSED) return false;
+
+	// How much of the last train's period is over. The pause counts one ms
+	// short, so the tick's granularity can't start the next train early.
+	uint32_t interval = _timerDataConfig.TriggerPulseTrainInterval;
+	uint32_t elapsed_us = interval;
+	if (interval > 0U) {
+		uint32_t paused_ms = HAL_GetTick() - _paused_tick;
+		uint32_t paused_us = 0U;
+		if (paused_ms > 1U) {
+			paused_us = (paused_ms - 1U > interval / 1000U) ? interval : (paused_ms - 1U) * 1000U;
+		}
+		if (paused_us < interval - _gap_elapsed_us) elapsed_us = _gap_elapsed_us + paused_us;
+	}
+
+	_pulseCount = 0;
+	arm_trigger_timers();
+	// Before HIRES starts: its interrupt checks it.
+	_timerDataConfig.TriggerStatus = TRIGGER_STATUS_RUNNING;
+
+	if (elapsed_us < interval) {
+		// HIRES runs out the rest of that period, then starts the next train.
+		__HAL_TIM_SET_COUNTER(&HIRES_TIMER, elapsed_us);
+		_resume_wait = true;
+		HAL_TIM_Base_Start_IT(&HIRES_TIMER);
+	} else {
+		HAL_TIM_Base_Start_IT(&LORES_TIMER);
+		if (interval > 0U) {
+			HAL_TIM_Base_Start_IT(&HIRES_TIMER);
+		}
+	}
+	return true;
+}
+
+bool trigger_pause_expired(void)
+{
+	return _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED &&
+	       (HAL_GetTick() - _paused_tick) >= TRIGGER_PAUSE_TIMEOUT_S * 1000U;
 }
 
 void TRIG_TIM2_IRQHandler(void) {
@@ -667,6 +824,13 @@ void TRIG_TIM2_IRQHandler(void) {
 
     // One-shot PWM deliberately not stopped here.
 
+	// A resumed sequence's owed gap is over: no train ended here.
+	if (_resume_wait) {
+		_resume_wait = false;
+		start_next_train();
+		return;
+	}
+
 	_trainCount++;
     if(_timerDataConfig.TriggerMode == TRIGGER_MODE_SINGLE) {
         stop_after_final_pulse();
@@ -674,20 +838,7 @@ void TRIG_TIM2_IRQHandler(void) {
     }else if(_trainCount>=_timerDataConfig.TriggerPulseTrainCount &&  _timerDataConfig.TriggerMode != TRIGGER_MODE_CONTINUOUS) {
         stop_after_final_pulse();
 	}else{
-	    // Reset pulse-level profile cycling for the new pulse train
-	    if (_auto_cycle.is_active) {
-	        _auto_cycle.pulse_counter_in_profile = 0;
-	        schedule_profile_action(PROFILE_ACTION_RESET);
-	    }
-
-	    _pulseCount = 0;
-	    __HAL_TIM_ENABLE_IT(&LORES_TIMER, TIM_IT_UPDATE);
-	    HAL_TIM_Base_Start_IT(&LORES_TIMER);
-
-        if(_timerDataConfig.TriggerPulseTrainInterval>0) {
-            __HAL_TIM_ENABLE_IT(&HIRES_TIMER, TIM_IT_UPDATE);
-            HAL_TIM_Base_Start_IT(&HIRES_TIMER);
-        }
+	    start_next_train();
 
 	    // Report after restarting timers since in async mode this blocks ~1 ms on USB.
 	    pulsetrain_complete_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
@@ -733,6 +884,13 @@ static bool handle_back_to_back_train_boundary(void)
         return true;
     }
 
+    // No gap to owe: resume can start the next train at once.
+    if (_pause_pending) {
+        _pause_pending = false;
+        if (end_after_final_pulse(END_PAUSE)) finish_pause();
+        return true;
+    }
+
     // Back-to-back restart, one-shot PWM deliberately not stopped here.
     _pulseCount = 0;
 
@@ -766,6 +924,11 @@ void TRIG_TIM1_IRQHandler(void) {
         if(_timerDataConfig.TriggerPulseTrainInterval == 0 && handle_back_to_back_train_boundary()) {
             return;
     	}
+        // The train's pulses are out: a pending pause lands now, not after its gap.
+        if (_pause_pending && pause_in_gap()) {
+            if (end_after_final_pulse(END_PAUSE)) finish_pause();
+            return;
+        }
     }
     pulse_complete_callback(_pulseCount, _timerDataConfig.TriggerPulseCount);
 }

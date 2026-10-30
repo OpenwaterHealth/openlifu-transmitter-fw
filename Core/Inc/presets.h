@@ -5,7 +5,7 @@
  * host picks one with OW_PRESET_LOAD.
  *
  *   FDA_MODE  one preset, linked into the image at the end of the
- *             application slot (pages 124-125, the FDA linker scripts'
+ *             application slot (pages 108-109, the FDA linker scripts'
  *             FDA_PRESET region), from Core/Inc/presets/fda_preset.h.
  *             Flashing or updating the image writes it; nothing in the image
  *             writes it, or the user config. Always locked (below).

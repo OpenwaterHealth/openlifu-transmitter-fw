@@ -717,6 +717,11 @@ int main(void)
       {
         (void)stop_sequence();
       }
+      // A pause not resumed in time ends the sequence; resume is refused after.
+      if (trigger_pause_expired())
+      {
+        (void)stop_sequence();
+      }
     }
   }
   /* USER CODE END 3 */
