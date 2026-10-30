@@ -72,6 +72,7 @@ bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us, uint32_t
 	trigger_trains = train_count;
 	return true;
 }
+void trigger_set_timeout_s(uint32_t timeout_s) { (void)timeout_s; }
 uint32_t HAL_GetTick(void) { return 0U; }
 
 #ifndef PRESET_TABLE
