@@ -544,6 +544,7 @@ int main(void)
   HAL_GPIO_WritePin(TR7_EN_GPIO_Port, TR7_EN_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(TR8_EN_GPIO_Port, TR8_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(50);
+  trigger_register_interlock();
   MX_USB_DEVICE_Init();
 
   HAL_Delay(500);

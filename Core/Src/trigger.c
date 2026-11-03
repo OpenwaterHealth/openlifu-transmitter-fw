@@ -2,6 +2,7 @@
 #include "main.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "usb_events.h"
 
 #include "jsmn.h"
 
@@ -577,6 +578,22 @@ uint8_t stop_trigger_pulse(void) {
     trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
     return TRIGGER_STATUS_READY;
+}
+
+/**
+ * @brief  USB event callback - stops the trigger when the host link is lost
+ *         (SR-015). Runs in USB interrupt context.
+ */
+static void trigger_usb_event_cb(usb_event_t event)
+{
+    (void)event;
+    stop_trigger_pulse();
+}
+
+void trigger_register_interlock(void)
+{
+    usb_register_callback(USB_EVENT_PORT_CLOSE, trigger_usb_event_cb);
+    usb_register_callback(USB_EVENT_DISCONNECT, trigger_usb_event_cb);
 }
 
 static void finish_sequence(void)
