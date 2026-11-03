@@ -1,8 +1,8 @@
 """An FDA image refuses DFU entry and raw I2C to the module bootloaders (SR-021).
 
-Bench step 4.06. FDA images only: on a DEV image these commands would run, and
-DFU would drop the board into its bootloader, so every test here skips there.
-The locked-DEV equivalents are in test_preset_lock.py. Keep the console HV off.
+Bench step 4.06. Presets-only images (+fda or +test) only: on a standard image
+these commands would run, and DFU would drop the board into its bootloader, so
+every test here skips there. Keep the console HV off.
 
 The last test resets the transmitter and reconnects.
 """
@@ -34,8 +34,8 @@ RECONNECT_TIMEOUT_S = 20.0
 
 @pytest.fixture(autouse=True)
 def fda_only(variant):
-    if variant == "dev":
-        pytest.skip("FDA image only: a DEV image would run these")
+    if variant == "standard":
+        pytest.skip("presets-only images only: a standard image would run these")
 
 
 def _assert_refused_and_still_running(txdevice, r):
@@ -43,7 +43,7 @@ def _assert_refused_and_still_running(txdevice, r):
     assert (r.packet_type, r.reserved) == (OW_ERROR, OW_FDA_REFUSED)
     # Still the application, not a bootloader.
     assert txdevice.ping()
-    assert txdevice.get_version().endswith("+fda")
+    assert txdevice.get_version().endswith(("+fda", "+test"))
 
 
 @pytest.mark.parametrize("reserved", [0x00, 0x77])
@@ -85,4 +85,4 @@ def test_reset_still_works_after_the_refusals(txdevice):
         time.sleep(0.5)
 
     assert txdevice.ping()
-    assert txdevice.get_version().endswith("+fda"), "did not come back as the FDA image"
+    assert txdevice.get_version().endswith(("+fda", "+test")), "did not come back as the FDA image"
