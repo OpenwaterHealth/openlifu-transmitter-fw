@@ -34,7 +34,7 @@ RECONNECT_TIMEOUT_S = 20.0
 
 @pytest.fixture(autouse=True)
 def fda_only(variant):
-    if variant != "fda":
+    if variant == "dev":
         pytest.skip("FDA image only: a DEV image would run these")
 
 
