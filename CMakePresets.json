@@ -14,7 +14,7 @@
             "name": "Debug",
             "inherits": "default",
             "displayName": "Debug (Bootloader slot)",
-            "description": "DEV debug build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. Full host control and the runtime preset lock; cannot store presets (Core/Inc/presets.h).",
+            "description": "Debug build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug"
             }
@@ -23,7 +23,7 @@
             "name": "Release",
             "inherits": "default",
             "displayName": "Release (Bootloader slot)",
-            "description": "DEV release build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. This is the image that gets signed. Full host control and the runtime preset lock; cannot store presets (Core/Inc/presets.h).",
+            "description": "Release build for the SBSFU bootloader slot: FLASH @ 0x08010400, VTOR 0x08010400. This is the image that gets signed.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
@@ -32,7 +32,7 @@
             "name": "Debug-BareMetal",
             "inherits": "default",
             "displayName": "Debug (Bare metal)",
-            "description": "Standalone DEV debug build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 110-125.",
+            "description": "Standalone debug build, no bootloader: FLASH @ 0x08000000",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "BARE_METAL": "ON"
@@ -42,7 +42,7 @@
             "name": "Release-BareMetal",
             "inherits": "default",
             "displayName": "Release (Bare metal)",
-            "description": "Standalone DEV release build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 110-125.",
+            "description": "Standalone release build, no bootloader: FLASH @ 0x08000000",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "BARE_METAL": "ON"

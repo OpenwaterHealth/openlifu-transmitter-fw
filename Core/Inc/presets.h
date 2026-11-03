@@ -4,25 +4,13 @@
  * Presets the firmware -- not the host -- programs the TX7332 chips from. The
  * host picks one with OW_PRESET_LOAD.
  *
- *   FDA_MODE  one preset, linked into the image at the end of the
- *             application slot (pages 124-125, the FDA linker scripts'
- *             FDA_PRESET region), from Core/Inc/presets/fda_preset.h.
- *             Flashing or updating the image writes it; nothing in the image
- *             writes it, or the user config. Always locked (below).
- *   DEV       every other build: presets in pages 110-125, above the
- *             application slot: 16 slots of one page, slot N being preset
- *             index N. A blob longer than a page runs on into the next slot,
- *             which then has no preset of its own. The host may also write
- *             the registers and trigger itself, as a research build does.
- *
- * The lock (OW_PRESET_LOCK) puts a DEV image in the FDA image's place: the
- * host may load presets but not change them, the registers, the trigger, the
- * user config or the firmware (preset_policy.h). Only a reset unlocks it.
- * Unlocked, a raw register, profile or trigger write leaves nothing loaded.
- *
- * Only a bare-metal DEV image stores presets (PRESET_STORE). Under the
- * bootloader, pages 110-125 are the end of its slot, which it checks are
- * erased at every boot, so a stored preset would stop the image booting.
+ * Presets exist only in a presets-only image (FDA_MODE, +fda or +test): one
+ * preset, linked into the image at the end of the application slot (pages
+ * 124-125, the FDA linker scripts' FDA_PRESET region), from
+ * Core/Inc/presets/fda_preset.h. Flashing or updating the image writes it;
+ * nothing in the image writes it, or the user config. Such an image refuses
+ * whatever would change what a preset runs (preset_policy.h). A standard
+ * image has no presets: the host owns the TX7332 registers and the trigger.
  *
  * A module programs only its own chips, so a preset spanning modules is one
  * blob per module, in that module's own flash, with its own regs_crc.
@@ -36,18 +24,13 @@
  * without a fresh reading), and a running sequence stops at its shutoff_C.
  * With nothing loaded the trigger does not start.
  *
- * A stored upload is staged in RAM and written only once all of it has
- * arrived and checks out; its magic is programmed last, so a write cut short
- * leaves a slot that reads as empty.
+ * Nothing here exists unless FDA_MODE is defined.
  */
 
 #ifndef INC_PRESETS_H_
 #define INC_PRESETS_H_
 
-// USER_VECT_TAB_ADDRESS is set for every image that runs under the bootloader.
-#if !defined(FDA_MODE) && !defined(USER_VECT_TAB_ADDRESS)
-#define PRESET_STORE
-#endif
+#ifdef FDA_MODE
 
 #include "tx7332.h"
 
@@ -88,16 +71,10 @@
  */
 #define PRESET_BLOB_VERSION 1u
 
-#define PRESET_SLOTS       16u
-#define PRESET_SLOT_SIZE   2048u                       // one flash page
-#define PRESET_BLOB_MAX    (2u * PRESET_SLOT_SIZE)     // a blob may take two slots
+#define PRESET_BLOB_MAX    4096u     // the FDA_PRESET region: two flash pages
 
-// Preset indexes: FDA mode runs one preset, from slot 0; DEV has every slot.
-#ifdef FDA_MODE
+// Preset indexes: one preset, index 0.
 #define PRESET_COUNT 1u
-#else
-#define PRESET_COUNT PRESET_SLOTS
-#endif
 
 // A blob, parsed and bounds-checked by presets_get(). The pointers aim into
 // the blob, where multi-byte fields sit unaligned: read train counts with
@@ -140,8 +117,8 @@ uint8_t presets_count(void);
 
 /**
  * @brief  What a preset index holds.
- * @return OW_SUCCESS if it heads a blob, else OW_PRESET_EMPTY,
- *         OW_PRESET_SLOT_TAIL, or OW_INVALID_PACKET past the last index.
+ * @return OW_SUCCESS if it holds a blob, else OW_PRESET_EMPTY, or
+ *         OW_INVALID_PACKET past the last index.
  */
 uint8_t presets_slot_state(uint8_t slot);
 
@@ -197,21 +174,6 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
  */
 bool presets_unload(void);
 
-/**
- * @brief  An unlocked host write is about to change the registers, profiles
- *         or trigger (preset_policy_raw_write()) of this module (here) or of
- *         another one it is forwarded to. Here, leave nothing loaded, since
- *         the loaded preset no longer describes the chips; elsewhere, that
- *         module unloads itself when it runs the write.
- * @return false, changing nothing, if a loaded preset is running: the write,
- *         wherever it goes, would change it mid-burst and is refused. With
- *         nothing loaded, always true.
- */
-bool presets_raw_write(bool here);
-
-/** Is a preset loaded on this module? */
-bool presets_loaded(void);
-
 // What this module has loaded (OW_PRESET_LOADED).
 typedef struct {
 	uint8_t index;
@@ -223,16 +185,6 @@ typedef struct {
 
 /** @return false, leaving *out alone, if nothing is loaded. */
 bool presets_loaded_info(PresetLoaded *out);
-
-#ifdef FDA_MODE
-static inline bool presets_locked(void) { return true; }
-static inline void presets_lock(void) { }
-#else
-/** Is the lock on? Always, in FDA_MODE. */
-bool presets_locked(void);
-/** Turn the lock on, until the next reset. */
-void presets_lock(void);
-#endif
 
 // A reading older than this counts as no reading: a sensor that stops
 // answering must not leave a run going on its last value.
@@ -258,39 +210,6 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size);
  */
 bool presets_thermal_trip(void);
 
-#ifdef PRESET_STORE
-
-/** Slots that hold nothing: neither a preset nor the second half of one. */
-uint8_t presets_free_slots(void);
-
-/**
- * @brief  Take the next part of an upload for a slot. Offset 0 starts one;
- *         later parts must follow on from the last, for the same slot.
- * @return OW_SUCCESS, or OW_INVALID_PACKET, which also abandons the upload.
- */
-uint8_t presets_stage(uint8_t slot, uint32_t offset, const uint8_t *data, uint16_t len);
-
-/**
- * @brief  Store the uploaded blob in its slot, replacing what was there.
- *
- * Refused, with nothing changed, unless the upload is total_len bytes with
- * CRC-32 blob_crc, is a well-formed PRESET_BLOB whose body matches its
- * regs_crc, and fits: a blob longer than one slot needs the next slot to be
- * free or already its own.
- *
- * @return OW_SUCCESS, OW_INVALID_PACKET, OW_BAD_CRC, OW_PRESET_SLOT_TAIL,
- *         OW_PRESET_NO_ROOM, OW_PRESET_BUSY, or OW_UNKNOWN_ERROR if the flash
- *         write failed (the slot is then empty).
- */
-uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc);
-
-/**
- * @brief  Empty a slot. Already empty is not an error.
- * @return OW_SUCCESS, OW_INVALID_PACKET, OW_PRESET_SLOT_TAIL, OW_PRESET_BUSY,
- *         or OW_UNKNOWN_ERROR if the erase failed.
- */
-uint8_t presets_delete(uint8_t slot);
-
-#endif /* PRESET_STORE */
+#endif /* FDA_MODE */
 
 #endif /* INC_PRESETS_H_ */

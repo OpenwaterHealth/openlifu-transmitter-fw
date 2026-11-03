@@ -18,4 +18,4 @@ and none of them needs acoustic output.
 
 | File | Image | Checks |
 |---|---|---|
-| `test_preset_refusals.py` | `Release-FDA` (or `Release-Preset` with the preset in slot 0) | `SET_SWTRIG` refused with or without a loaded preset; each run length selected through `OW_PRESET_LOAD`; an out-of-range run length refused |
+| `test_preset_refusals.py` | `Release-FDA` (+fda or +test); skipped on a standard image | `SET_SWTRIG` refused with or without a loaded preset; each run length selected through `OW_PRESET_LOAD`; an out-of-range run length refused |

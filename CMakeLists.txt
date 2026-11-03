@@ -132,15 +132,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # ---------------------------
 # Two builds (Core/Inc/presets.h):
 #
-# FDA_MODE links one read-only preset into the end of the bootloader's slot,
-# pages 124-125, and is always preset-locked: the host loads the preset and
-# can change nothing else. Its header, Core/Inc/presets/fda_preset.h, comes
-# from the openlifu SDK's examples/generate_presets.py.
+# FDA_MODE, a presets-only image, links one read-only preset into the end of
+# the bootloader's slot, pages 124-125: the host loads the preset and can
+# change nothing else (preset_policy.c). Its header,
+# Core/Inc/presets/fda_preset.h, comes from the openlifu SDK's
+# examples/generate_presets.py.
 #
-# Every other build is DEV: full host control, presets in pages 110-125, and
-# a runtime lock (OW_PRESET_LOCK) that refuses what FDA_MODE refuses until the
-# next reset. Only a bare-metal DEV image can store presets, since the
-# bootloader's slot still covers pages 110-125.
+# Every other build is a standard image: no presets, and the host owns the
+# TX7332 registers and the trigger.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
 
 # A presets-only (FDA_MODE) image reports which preset set it carries:
@@ -161,18 +160,17 @@ if(FDA_MODE)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
     set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 
-    message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
+    message(STATUS "FDA mode    : ON (preset at pages 124-125, host writes refused)")
 else()
     set(FW_BUILD_VARIANT "")
-    message(STATUS "FDA mode    : OFF (DEV: host control, preset slots, runtime lock)")
+    message(STATUS "FDA mode    : OFF (standard: no presets, host owns the TX7332 registers)")
 endif()
 
 # OW_CMD_VERSION returns FW_VERSION. A presets-only image appends
 # "+<FW_PRESET_VARIANT>" (semver build metadata), so the host can tell which
 # preset set it carries without writing to the device. Any other build has no
 # suffix: all commands are enabled and the host treats it as a development or
-# service image. Whether such an image is locked is runtime state:
-# OW_PRESET_LOCK reports it.
+# service image.
 if(FW_BUILD_VARIANT)
     set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
 else()
