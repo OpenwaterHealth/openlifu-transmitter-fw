@@ -492,8 +492,8 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	}
 
 	// The preset owns its sequence timing and its run-length choices, so the
-	// host never sends SET_SWTRIG in a preset mode -- which matters because
-	// that clears the profile cycle.
+	// preset builds refuse SET_SWTRIG (which would also clear the profile
+	// cycle installed above).
 	uint32_t trains = presets_train_count(&preset, (uint8_t)duration_index);
 	if (!trigger_set_config(preset.trig_frequency_hz,
 	                        PRESET_TRIGGER_PULSE_WIDTH_US,
