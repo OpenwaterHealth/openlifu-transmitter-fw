@@ -145,11 +145,6 @@
 #define FLASH_START_ADDRESS        			((uint32_t)0x08000000)
 #define APPLICATION_ADDRESS        			((uint32_t)0x08010000) // application slot, pages 32-109: signed header, then the image at +0x400
 #define APPLICATION_MAX_SIZE                ((uint32_t)(156U * 1024U))
-#ifdef FDA_MODE
-// The slot's last two pages hold the one preset, linked into the image so the
-// signature covers it (FDA_PRESET in the FDA linker scripts).
-#define FDA_PRESET_ADDRESS                  ADDR_FLASH_PAGE_108
-#endif
 #define APPLICATION_USER_CONFIG    			((uint32_t)0x0803F800) // 2 KB user config region (page 127, end of flash), application use only -- not writable via DFU
 
 // Presets, pages 110-125 (PRESET_MODE, see presets.h). Outside the

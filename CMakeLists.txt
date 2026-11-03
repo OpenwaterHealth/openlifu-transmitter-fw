@@ -78,18 +78,18 @@ enable_language(C ASM)
 # Bare-metal build option (mirrors openlifu-console-fw):
 #   BARE_METAL=OFF (default) : image runs under the SBSFU secure bootloader from
 #                              the active slot — FLASH origin=0x08010400,
-#                              LENGTH=155K (FDA: 151K), VTOR=0x08010400 (slot + signed-header
+#                              LENGTH=155K, VTOR=0x08010400 (slot + signed-header
 #                              offset; uses STM32L443XX_FLASH.ld). This is the
 #                              image that gets signed.
-#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=220K (FDA: 216K), no
+#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=220K, no
 #                              bootloader (uses STM32L443RCIX_FLASH.ld).
 option(BARE_METAL "Build a bare-metal image (no bootloader; runs at 0x08000000)" OFF)
 
 if(BARE_METAL)
-    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=220K (FDA: 216K)")
+    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=220K")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH.ld")
 else()
-    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=155K (FDA: 151K), VTOR=0x08010400 (SBSFU slot + signed-header offset)")
+    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=155K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld")
 endif()
 
@@ -140,13 +140,13 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # In both preset modes the firmware programs the TX7332 chips from a preset
 # and refuses host register writes (Core/Inc/presets.h).
 #
-# FDA_MODE links one read-only preset into the end of the bootloader's slot,
-# pages 108-109. Its header, Core/Inc/presets/fda_preset.h, comes from the
-# openlifu SDK's examples/generate_presets.py.
+# FDA_MODE links one read-only preset into the image right after the code, so
+# the signature covers it. Its header, Core/Inc/presets/fda_preset.h, comes
+# from the openlifu SDK's examples/generate_presets.py.
 #
 # PRESET_MODE keeps writable presets in pages 110-125. It needs the bootloader
 # whose slot ends at page 109.
-option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
+option(FDA_MODE "One read-only preset, linked into the image" OFF)
 option(PRESET_MODE "Writable presets in pages 110-125" OFF)
 
 if(FDA_MODE AND PRESET_MODE)
@@ -161,7 +161,7 @@ if(FDA_MODE)
     endif()
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
 
-    message(STATUS "FDA mode    : ON (preset at pages 108-109)")
+    message(STATUS "FDA mode    : ON (preset linked in after the code)")
 elseif(PRESET_MODE)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
 
@@ -201,7 +201,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 )
 
 # Linker script (conditional on BOOTLOADER_BUILD)
-# The linker script sizes the app slot and the preset region from FDA_MODE.
+# The linker script refuses a .fda_preset section in any build but FDA_MODE.
 if(FDA_MODE)
     set(FDA_LAYOUT 1)
 else()

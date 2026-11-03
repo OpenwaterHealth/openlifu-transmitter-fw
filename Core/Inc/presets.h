@@ -4,9 +4,9 @@
  * Presets the firmware -- not the host -- programs the TX7332 chips from. The
  * host picks one with OW_PRESET_LOAD; host register writes are refused.
  *
- *   FDA_MODE     one preset, linked into the image at the end of the
- *                application slot (pages 108-109, the FDA linker scripts'
- *                FDA_PRESET region), from Core/Inc/presets/fda_preset.h.
+ *   FDA_MODE     one preset, linked into the image right after the code
+ *                (the linker scripts' .fda_preset section), from
+ *                Core/Inc/presets/fda_preset.h, so the signature covers it.
  *                Flashing or updating the image writes it; nothing in the
  *                image writes it, or the user config.
  *   PRESET_MODE  presets in pages 110-125, above the application slot, which

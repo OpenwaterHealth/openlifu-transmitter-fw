@@ -194,8 +194,8 @@ static bool slot_blob(uint8_t slot, PresetBlob *out)
 
 #else /* PRESET_MODE */
 
-// The one preset, from the SDK. The linker puts it at the start of the
-// FDA_PRESET region; it is read from there, so what runs is what was flashed.
+// The one preset, from the SDK. The linker puts it right after the code
+// (.fda_preset); it is read from there, so what runs is what was flashed.
 #include "presets/fda_preset.h"
 extern const uint8_t _sfda_preset[];
 
