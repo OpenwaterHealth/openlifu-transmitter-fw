@@ -93,11 +93,14 @@ def loaded(txdevice) -> dict:
 
 @pytest.fixture(scope="session")
 def variant(txdevice) -> str:
+    """The preset set of a presets-only image ("fda" or "test"), else "dev"."""
     version = txdevice.get_version()
-    for v in ("fda", "dev"):
-        if version.endswith("+" + v):
-            return v
-    pytest.skip(f"image reports no build variant ({version})")
+    _, plus, suffix = version.partition("+")
+    if not plus:
+        return "dev"
+    if suffix in ("fda", "test"):
+        return suffix
+    pytest.skip(f"image reports an unknown build variant ({version})")
 
 
 @pytest.fixture(scope="session")
