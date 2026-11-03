@@ -613,14 +613,21 @@ uint8_t stop_trigger_pulse(void) {
     return TRIGGER_STATUS_READY;
 }
 
-/**
- * @brief  USB event callback - stops the trigger when the host link is lost
- *         (SR-015). Runs in USB interrupt context.
- */
+// Set in the USB interrupt, acted on by the main loop: a stop from the
+// interrupt could land inside START or RESUME and be overwritten (SR-015).
+static volatile bool _host_lost = false;
+
 static void trigger_usb_event_cb(usb_event_t event)
 {
     (void)event;
-    stop_trigger_pulse();
+    _host_lost = true;
+}
+
+bool trigger_take_host_lost(void)
+{
+    if (!_host_lost) return false;
+    _host_lost = false;
+    return true;
 }
 
 void trigger_register_interlock(void)
