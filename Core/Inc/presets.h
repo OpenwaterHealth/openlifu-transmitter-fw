@@ -17,8 +17,15 @@
  *             index N. A blob longer than a page runs on into the next slot,
  *             which then has no preset of its own. The host also keeps the
  *             registers and the trigger: a raw register, profile or trigger
- *             write leaves nothing loaded, and is refused (OW_PRESET_BUSY)
- *             while a loaded preset runs.
+ *             write leaves nothing loaded on the module that runs it, and is
+ *             refused (OW_PRESET_BUSY) while a loaded preset runs.
+ *
+ * Each module keeps its own load: a raw write to one module's chips unloads
+ * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
+ * every module on the same preset is the host's job; configuring modules
+ * differently is a research use of the low-level commands. A raw write the
+ * handler then rejects has still unloaded: a preset counts as loaded only on
+ * the happy path.
  *
  * Only a bare-metal standard image stores presets (PRESET_STORE). Under the
  * bootloader, pages 110-125 are the end of its slot, which it checks are
@@ -205,9 +212,10 @@ bool presets_unload(void);
  *         another one it is forwarded to. Here, leave nothing loaded, since
  *         the loaded preset no longer describes the chips; elsewhere, that
  *         module unloads itself when it runs the write.
- * @return false, changing nothing, if a loaded preset is running: the write,
- *         wherever it goes, would change it mid-burst and is refused. With
- *         nothing loaded, always true.
+ * @return false, changing nothing, if a loaded preset is running here: the
+ *         write would change it mid-burst and is refused. Only the master
+ *         runs the trigger, so a module never refuses (#57). With nothing
+ *         loaded, always true.
  */
 bool presets_raw_write(bool here);
 

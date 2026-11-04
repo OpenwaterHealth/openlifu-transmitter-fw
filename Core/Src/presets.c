@@ -17,9 +17,9 @@
 
 extern TX7332 transmitters[TX_PER_MODULE];
 
-// Thermal limits of the preset the chips were last programmed from; they
-// govern every start until another load replaces them. Kept by value so they
-// never depend on the blob staying where it was.
+// Thermal limits of the loaded preset; they govern START and a running
+// sequence while it stays loaded (presets_start_check(), presets_thermal_trip()).
+// Kept by value so they never depend on the blob staying where it was.
 static bool preset_loaded = false;
 static int16_t loaded_start_c_x10 = 0;
 static int16_t loaded_shutoff_c_x10 = 0;
