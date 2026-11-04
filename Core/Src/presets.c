@@ -1,7 +1,5 @@
 #include "presets.h"
 
-#ifdef FDA_MODE
-
 #include "common.h"
 #include "if_commands.h"
 #include "module_manager.h"
@@ -12,6 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "memory_map.h"
+#ifdef PRESET_STORE
+#include "flash_eeprom.h"
+#endif
 
 extern TX7332 transmitters[TX_PER_MODULE];
 
@@ -21,7 +23,8 @@ extern TX7332 transmitters[TX_PER_MODULE];
 static bool preset_loaded = false;
 static int16_t loaded_start_c_x10 = 0;
 static int16_t loaded_shutoff_c_x10 = 0;
-// Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it.
+// Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it,
+// and storing over its slot unloads it.
 static PresetLoaded loaded;
 
 // Where one preset's blob is, and how long.
@@ -129,6 +132,65 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	return c.p == c.end;
 }
 
+#ifndef FDA_MODE
+
+_Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESETS_SIZE,
+               "the slots must fill the reserved pages exactly");
+
+static uint32_t slot_address(uint8_t slot)
+{
+	return PRESETS_ADDRESS + ((uint32_t)slot * PRESET_SLOT_SIZE);
+}
+
+static uint8_t slots_for(uint32_t len)
+{
+	return (len > PRESET_SLOT_SIZE) ? 2U : 1U;
+}
+
+// Length of the blob that starts at a slot, or 0 if none does. The header is
+// enough to tell: commit only stores a blob that validated, magic last.
+static uint32_t header_len(uint8_t slot)
+{
+	const uint8_t *p = (const uint8_t *)slot_address(slot);
+	if (memcmp(p, "OWPR", 4U) != 0) return 0U;
+	uint32_t len = rd_u32(&p[8]);
+	uint32_t room = (uint32_t)(PRESET_SLOTS - slot) * PRESET_SLOT_SIZE;
+	if (room > PRESET_BLOB_MAX) room = PRESET_BLOB_MAX;
+	return (len <= room) ? len : 0U;
+}
+
+// Slots are claimed front to back, a long blob taking the slot after it, so
+// what a slot is depends on the ones before it. Returns the length of the blob
+// the slot heads, or 0 with *tail saying whether the preset before owns it.
+static uint32_t slot_len(uint8_t slot, bool *tail)
+{
+	*tail = false;
+	for (uint8_t i = 0; i < PRESET_SLOTS; ) {
+		uint32_t len = header_len(i);
+		if (i == slot) return len;
+		if (len > PRESET_SLOT_SIZE && (uint8_t)(i + 1U) == slot) {
+			*tail = true;
+			return 0U;
+		}
+		i = (uint8_t)(i + ((len != 0U) ? slots_for(len) : 1U));
+	}
+	return 0U;
+}
+
+// The blob a slot holds, if it heads one.
+static bool slot_blob(uint8_t slot, PresetBlob *out)
+{
+	bool tail;
+	if (slot >= PRESET_SLOTS) return false;
+	uint32_t len = slot_len(slot, &tail);
+	if (len == 0U) return false;
+	out->data = (const uint8_t *)slot_address(slot);
+	out->len = len;
+	return true;
+}
+
+#else /* FDA_MODE */
+
 // The one preset, from the SDK. The linker puts it at the start of the
 // FDA_PRESET region; it is read from there, so what runs is what was flashed.
 #include "presets/fda_preset.h"
@@ -145,13 +207,121 @@ static bool fda_blob(PresetBlob *out)
 	return true;
 }
 
+#endif /* FDA_MODE */
+
 uint8_t presets_slot_state(uint8_t slot)
 {
 	if (slot >= PRESET_COUNT) return OW_INVALID_PACKET;
+#ifndef FDA_MODE
+	bool tail;
+	if (slot_len(slot, &tail) != 0U) return OW_SUCCESS;
+	return tail ? OW_PRESET_SLOT_TAIL : OW_PRESET_EMPTY;
+#else
 	PresetBlob blob;
 	return fda_blob(&blob) ? OW_SUCCESS : OW_PRESET_EMPTY;
+#endif
 }
 
+#ifdef PRESET_STORE
+
+// The upload in progress; one at a time, and offset 0 starts over.
+static uint8_t stage[PRESET_BLOB_MAX];
+static uint32_t stage_len = 0;
+static uint8_t stage_slot = PRESET_SLOTS;   // none
+
+// Is this a well-formed PRESET_BLOB whose body matches its regs_crc?
+static bool blob_valid(const uint8_t *data, uint32_t len)
+{
+	Preset preset;
+	return parse_blob(data, len, &preset) && presets_regs_crc(&preset) == preset.regs_crc;
+}
+
+// Slots [first, first + count) are about to change. If the loaded preset is
+// among them, nothing counts as loaded until the next load.
+static void slots_changing(uint8_t first, uint8_t count)
+{
+	if (preset_loaded && loaded.index >= first && (uint8_t)(loaded.index - first) < count) {
+		preset_loaded = false;
+	}
+}
+
+uint8_t presets_free_slots(void)
+{
+	uint8_t free_slots = 0;
+	for (uint8_t i = 0; i < PRESET_SLOTS; ) {
+		uint32_t len = header_len(i);
+		if (len == 0U) free_slots++;
+		i = (uint8_t)(i + ((len != 0U) ? slots_for(len) : 1U));
+	}
+	return free_slots;
+}
+
+uint8_t presets_stage(uint8_t slot, uint32_t offset, const uint8_t *data, uint16_t len)
+{
+	if (slot >= PRESET_SLOTS) return OW_INVALID_PACKET;
+	if (offset == 0U) {
+		stage_slot = slot;
+		stage_len = 0U;
+	}
+	if (slot != stage_slot || offset != stage_len || len == 0U || len > (PRESET_BLOB_MAX - stage_len)) {
+		stage_slot = PRESET_SLOTS;
+		return OW_INVALID_PACKET;
+	}
+	memcpy(&stage[stage_len], data, len);
+	stage_len += len;
+	return OW_SUCCESS;
+}
+
+uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
+{
+	bool tail;
+	uint8_t staged = stage_slot;
+	stage_slot = PRESET_SLOTS;   // an upload gets one commit, pass or fail
+
+	if (slot >= PRESET_SLOTS || slot != staged || total_len != stage_len) return OW_INVALID_PACKET;
+	if (presets_crc32(stage, stage_len) != blob_crc || !blob_valid(stage, stage_len)) return OW_BAD_CRC;
+
+	uint32_t old_len = slot_len(slot, &tail);
+	if (tail) return OW_PRESET_SLOT_TAIL;
+	uint8_t new_slots = slots_for(stage_len);
+	uint8_t old_slots = slots_for(old_len);
+	uint8_t next = (uint8_t)(slot + 1U);
+	if (new_slots > old_slots && (next >= PRESET_SLOTS || header_len(next) != 0U)) return OW_PRESET_NO_ROOM;
+
+	// A flash erase stalls the core for milliseconds, trigger ISRs included.
+	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+
+	// Erase whatever the old blob held as well, so a shorter one frees its second slot.
+	uint8_t span = (new_slots > old_slots) ? new_slots : old_slots;
+	uint32_t base = slot_address(slot);
+	uint32_t end = base + ((uint32_t)span * PRESET_SLOT_SIZE);
+	slots_changing(slot, span);
+	if (Flash_Erase(base, end) != HAL_OK) return OW_UNKNOWN_ERROR;
+	if (Flash_Write(base + 8U, &stage[8], stage_len - 8U) != HAL_OK ||
+	    Flash_Write(base, stage, 8U) != HAL_OK ||
+	    memcmp((const void *)base, stage, stage_len) != 0) {
+		(void)Flash_Erase(base, end);
+		return OW_UNKNOWN_ERROR;
+	}
+	return OW_SUCCESS;
+}
+
+uint8_t presets_delete(uint8_t slot)
+{
+	bool tail;
+	if (slot >= PRESET_SLOTS) return OW_INVALID_PACKET;
+	uint32_t len = slot_len(slot, &tail);
+	if (tail) return OW_PRESET_SLOT_TAIL;
+	if (len == 0U) return OW_SUCCESS;
+	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+
+	uint32_t base = slot_address(slot);
+	slots_changing(slot, slots_for(len));
+	if (Flash_Erase(base, base + ((uint32_t)slots_for(len) * PRESET_SLOT_SIZE)) != HAL_OK) return OW_UNKNOWN_ERROR;
+	return OW_SUCCESS;
+}
+
+#endif /* PRESET_STORE */
 
 uint8_t presets_count(void)
 {
@@ -161,7 +331,11 @@ uint8_t presets_count(void)
 bool presets_get(uint8_t index, Preset *out)
 {
 	PresetBlob blob;
+#ifndef FDA_MODE
+	if (index >= PRESET_COUNT || !slot_blob(index, &blob)) return false;
+#else
 	if (index != 0U || !fda_blob(&blob)) return false;
+#endif
 	return parse_blob(blob.data, blob.len, out);
 }
 
@@ -314,9 +488,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		return false;
 	}
 
-	// The preset owns its sequence timing and its run-length choices, so a
-	// presets-only image refuses SET_SWTRIG (which would also clear the
-	// profile cycle installed above).
+	// The preset owns its sequence timing and its run-length choices: an
+	// FDA_MODE image refuses SET_SWTRIG, and a standard one unloads the
+	// preset on it (it would also clear the profile cycle installed above).
 	uint32_t trains = presets_train_count(&preset, (uint8_t)duration_index);
 	if (!trigger_set_config(preset.trig_frequency_hz,
 	                        PRESET_TRIGGER_PULSE_WIDTH_US,
@@ -341,6 +515,20 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	loaded.regs_crc = crc;
 	preset_loaded = true;
 	return true;
+}
+
+bool presets_raw_write(bool here)
+{
+	// A raw write while nothing is loaded is the research case: let it be.
+	if (!preset_loaded) return true;
+	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	if (here) preset_loaded = false;
+	return true;
+}
+
+bool presets_loaded(void)
+{
+	return preset_loaded;
 }
 
 bool presets_loaded_info(PresetLoaded *out)
@@ -411,5 +599,3 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	if (len < 0) return 0U;
 	return (len >= (int)size) ? (uint16_t)(size - 1U) : (uint16_t)len;
 }
-
-#endif /* FDA_MODE */

@@ -66,9 +66,12 @@ typedef enum {
 
 typedef enum {
 	OW_SUCCESS = 0x00,
-	// Presets (presets.h). 0xF3 and 0xF4 were the stored-preset slots' codes.
-	OW_PRESET_BUSY = 0xF2,       // trigger running; the preset cannot change now
-	OW_PRESET_EMPTY = 0xF5,      // no preset at that index
+	// Why a preset could not be stored or deleted (presets.h).
+	OW_PRESET_BUSY = 0xF2,       // trigger running; the presets cannot change now (also: a raw
+	                             //   write while a loaded preset runs)
+	OW_PRESET_NO_ROOM = 0xF3,    // blob needs the next slot too, and it is taken or missing
+	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
+	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
 	OW_FDA_REFUSED = 0xF8,       // a presets-only image refuses this (preset_policy.h)
 	// Preset modes: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
 	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
@@ -152,11 +155,13 @@ typedef enum {
 // packet type (the SDK keeps one command -> packet-type map), so these sit at
 // 0x50, clear of the power board's 0x30-0x43 block.
 //
-// Presets-only (FDA_MODE) images only. GET answers from the master's flash
-// and is never forwarded. LOAD is forwarded: each module programs its own
-// TX7332 chips and checks the CRC against its own copy. LOADED asks every
-// module (if_commands.c). 0x52-0x56 were the stored presets' and the runtime
-// lock's commands; do not reuse them.
+// GET and CAPACITY answer from the master's flash and are never forwarded.
+// LOAD is forwarded: each module programs its own TX7332 chips and checks the
+// CRC against its own copy. WRITE, COMMIT, DELETE and CAPACITY exist in a
+// bare-metal standard image only (PRESET_STORE); the three that change the
+// presets are forwarded too, since each module keeps its own. LOADED asks
+// every module (if_commands.c). 0x56 was the runtime lock's command; do not
+// reuse it.
 typedef enum {
 	OW_PRESET_GET = 0x50,   // reserved=index -> count, index, chips, profiles,
 	                        //   settings_crc u32, regs_crc u32, id_len, id
@@ -164,6 +169,13 @@ typedef enum {
 	                        //   + settings_crc u32 (all LE); OW_ERROR/OW_BAD_CRC if
 	                        //   either crc differs. Refused, or sent with no data,
 	                        //   nothing is left loaded
+	OW_PRESET_WRITE = 0x52, // reserved=slot, data=offset u16 LE + that part of
+	                        //   the blob; offset 0 starts an upload over
+	OW_PRESET_COMMIT = 0x53,// reserved=slot, data=length u32 + CRC-32 u32 of the
+	                        //   whole blob (both LE); stores what was uploaded
+	OW_PRESET_DELETE = 0x54,// reserved=slot; empties it
+	OW_PRESET_CAPACITY = 0x55, // -> slots, free slots, slot size u16,
+	                        //   largest blob u16 (both LE)
 	OW_PRESET_LOADED = 0x57,// -> 16 bytes: what every module has loaded, or
 	                        //   nothing (if_commands.c, preset_loaded_reply)
 } UstxPresetCommands;

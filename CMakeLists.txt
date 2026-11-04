@@ -138,8 +138,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # Core/Inc/presets/fda_preset.h, comes from the openlifu SDK's
 # examples/generate_presets.py.
 #
-# Every other build is a standard image: no presets, and the host owns the
-# TX7332 registers and the trigger.
+# Every other build is a standard image: the host owns the TX7332 registers
+# and the trigger, and may also load presets from pages 110-125. Only a
+# bare-metal standard image can store presets there, since the bootloader's
+# slot still covers pages 110-125.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
 
 # A presets-only (FDA_MODE) image reports which preset set it carries:
@@ -163,7 +165,7 @@ if(FDA_MODE)
     message(STATUS "FDA mode    : ON (preset at pages 124-125, host writes refused)")
 else()
     set(FW_BUILD_VARIANT "")
-    message(STATUS "FDA mode    : OFF (standard: no presets, host owns the TX7332 registers)")
+    message(STATUS "FDA mode    : OFF (standard: host control, preset slots at pages 110-125)")
 endif()
 
 # OW_CMD_VERSION returns FW_VERSION. A presets-only image appends
