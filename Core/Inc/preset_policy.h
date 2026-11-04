@@ -1,9 +1,10 @@
 /*
  * preset_policy.h
  *
- * Which host commands a presets-only image (FDA_MODE) refuses. Pure: no HAL,
- * no device state, so the table can be tested on the host (tests/unit). A
- * standard image refuses none of them.
+ * Which host commands a presets-only image (FDA_MODE) refuses, and which
+ * ones change what a loaded preset runs. Pure: no HAL, no device state, so
+ * the tables can be tested on the host (tests/unit). A standard image refuses
+ * none of them, but a raw write there leaves nothing loaded (presets.h).
  */
 
 #ifndef INC_PRESET_POLICY_H_
@@ -17,7 +18,9 @@
  *         registers, the delay or pattern profiles, the profile cycle or the
  *         trigger timing?
  *
- * A presets-only image refuses them: they belong to the loaded preset.
+ * A presets-only image refuses them: they belong to the loaded preset. A
+ * standard image runs them and leaves nothing loaded, so the device never
+ * reports a preset the chips no longer hold.
  */
 bool preset_policy_raw_write(uint8_t packet_type, uint8_t command);
 

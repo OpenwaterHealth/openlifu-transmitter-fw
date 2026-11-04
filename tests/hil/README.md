@@ -18,4 +18,5 @@ and none of them needs acoustic output.
 
 | File | Image | Checks |
 |---|---|---|
+| `test_preset_store.py` | bare-metal standard image (`Release-BareMetal`); skipped on +fda / +test, and under the bootloader | stores, loads and deletes a preset in a slot; a raw register or trigger write unloads it, or is refused with `OW_PRESET_BUSY` while it runs; with nothing loaded the host's own trigger config starts; `OW_PRESET_LOADED` across modules; `OW_PRESET_LOCK` (0x56) is gone |
 | `test_preset_refusals.py` | `Release-FDA` (+fda or +test); skipped on a standard image | `SET_SWTRIG` refused with or without a loaded preset; each run length selected through `OW_PRESET_LOAD`; an out-of-range run length refused |

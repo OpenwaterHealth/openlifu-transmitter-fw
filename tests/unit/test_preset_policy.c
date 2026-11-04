@@ -1,13 +1,14 @@
 /*
- * Host-side test of a presets-only image's refusal table
- * (Core/Src/preset_policy.c).
+ * Host-side test of Core/Src/preset_policy.c: a presets-only image's refusal
+ * table, and the raw writes that a standard image lets through but that leave
+ * nothing loaded (or are refused with OW_PRESET_BUSY while a preset runs).
  *
  * Every (packet type, command, reserved) a host can send is checked against
  * the table below, which is written out by hand: the refusals must be exactly
  * those of the FDA image before the table existed (#40, #34, #43).
  *
- * Built with -DFDA_MODE by tests/unit/run.sh. Pass --print to list the
- * refusals as well.
+ * Built by tests/unit/run.sh with and without -DFDA_MODE, as the firmware
+ * builds it. Pass --print to list the refusals as well.
  */
 
 #include "common.h"
@@ -120,8 +121,19 @@ int main(int argc, char **argv)
 	check("USR_CFG read open", preset_policy_fda_refusal(OW_CMD, OW_CMD_USR_CFG, 0), OW_SUCCESS, OW_CMD, OW_CMD_USR_CFG, 0);
 	check("TX7332 read open", preset_policy_fda_refusal(OW_TX7332, OW_TX7332_RREG, 0), OW_SUCCESS, OW_TX7332, OW_TX7332_RREG, 0);
 	check("ARM_PROFILE_CYCLE not a host write", preset_policy_raw_write(OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE), 0, OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE, 0);
+	// A standard image's preset store is not a raw write: storing or deleting
+	// unloads only the slots it changes (presets.c).
+	static const uint8_t store[] = { OW_PRESET_WRITE, OW_PRESET_COMMIT, OW_PRESET_DELETE, OW_PRESET_CAPACITY };
+	for (unsigned i = 0; i < sizeof(store); i++) {
+		check("preset store not a raw write", preset_policy_raw_write(OW_CONTROLLER, store[i]), 0, OW_CONTROLLER, store[i], 0);
+	}
 
-	printf("FDA build: %u refused (type, command, reserved) combinations, %u raw-write (type, command) pairs, %d failure(s)\n",
-	       refused, raw, failures);
+#ifdef FDA_MODE
+	const char *build = "FDA";
+#else
+	const char *build = "standard";
+#endif
+	printf("%s build: the FDA table refuses %u (type, command, reserved) combinations, %u raw-write (type, command) pairs, %d failure(s)\n",
+	       build, refused, raw, failures);
 	return failures ? 1 : 0;
 }

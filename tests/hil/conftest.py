@@ -7,8 +7,8 @@ Run from the repo root with the openlifu SDK installed:
 Skipped unless --preset is given and a transmitter answers on USB.
 
 A presets-only (FDA_MODE) image reports its preset set as a version suffix,
-+fda or +test. A standard image has no suffix and no presets, so the preset
-tests skip on it.
++fda or +test, and holds preset 0 built in. A standard image has no suffix;
+on it the tests store the preset in slot 0, which needs a bare-metal image.
 """
 
 import json
@@ -18,7 +18,12 @@ from pathlib import Path
 import pytest
 from openlifu_sdk.io.LIFUConfig import OW_CONTROLLER, OW_ERROR
 from openlifu_sdk.io.LIFUTXDevice import LIFUTxDevice
-from openlifu_sdk.io.LIFUTXPresets import compile_preset, preset_id, verify_preset
+from openlifu_sdk.io.LIFUTXPresets import (
+    compile_preset,
+    preset_id,
+    store_preset,
+    verify_preset,
+)
 
 # Not in the SDK yet (Core/Inc/common.h).
 OW_PRESET_LOADED = 0x57
@@ -96,5 +101,24 @@ def variant(txdevice) -> str:
 def presets_only(txdevice, machine_config, variant):
     """A presets-only image whose preset 0 is this preset."""
     if variant == "standard":
-        pytest.skip("a standard image has no presets")
+        pytest.skip("presets-only images only: a standard image refuses none of this")
+    verify_preset(txdevice, PRESET_INDEX, machine_config)
+
+
+@pytest.fixture(scope="session")
+def standard(variant):
+    """A standard image: host control and preset slots."""
+    if variant != "standard":
+        pytest.skip("standard images only")
+
+
+@pytest.fixture(scope="session")
+def preset_in_slot(txdevice, machine_config, standard):
+    """A standard image whose slot 0 holds this preset, stored if need be."""
+    try:
+        verify_preset(txdevice, PRESET_INDEX, machine_config)
+    except Exception:
+        if txdevice.get_preset_capacity() is None:
+            pytest.skip("a standard image under the bootloader cannot store presets")
+        store_preset(txdevice, PRESET_INDEX, machine_config)
     verify_preset(txdevice, PRESET_INDEX, machine_config)
