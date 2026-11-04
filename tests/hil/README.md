@@ -16,6 +16,12 @@ Without it, or without a transmitter on USB, every test is skipped.
 Keep the console HV off. These tests load presets and send trigger commands,
 and none of them needs acoustic output.
 
+`test_preset_store.py` deletes every preset it stored, but a run cut short can
+leave pages 110-125 written. Erase them (or mass-erase) before flashing the
+bootloader and a signed image on that board: bootloader 1.0.1 will not boot
+an image whose slot holds anything there (#56).
+
 | File | Image | Checks |
 |---|---|---|
-| `test_preset_refusals.py` | `Release-FDA` (or `Release-Preset` with the preset in slot 0) | `SET_SWTRIG` refused with or without a loaded preset; each run length selected through `OW_PRESET_LOAD`; an out-of-range run length refused |
+| `test_preset_store.py` | bare-metal standard image (`Release-BareMetal`); skipped on +fda / +test, and under the bootloader | stores, loads and deletes a preset in a slot; a raw register or trigger write unloads it, or is refused with `OW_PRESET_BUSY` while it runs; with nothing loaded the host's own trigger config starts; `OW_PRESET_LOADED` across modules; `OW_PRESET_LOCK` (0x56) is gone |
+| `test_preset_refusals.py` | `Release-FDA` (+fda or +test); skipped on a standard image | `SET_SWTRIG` refused with or without a loaded preset; each run length selected through `OW_PRESET_LOAD`; an out-of-range run length refused |
