@@ -16,6 +16,11 @@ Without it the preset tests skip; without a transmitter on USB, every test skips
 Keep the console HV off. These tests load presets and send trigger commands,
 and none of them needs acoustic output.
 
+`test_preset_store.py` deletes every preset it stored, but a run cut short can
+leave pages 110-125 written. Erase them (or mass-erase) before flashing the
+bootloader and a signed image on that board: bootloader 1.0.1 will not boot
+an image whose slot holds anything there (#56).
+
 | File | Image | Bench step | Checks |
 |---|---|---|---|
 | `test_fda_refusals.py` | `Release-FDA` (+fda or +test); skips on a standard image | 4.06 | `DFU` refused as `CMD` and `CONTROLLER` at the master and module 1, and as `ONE_WIRE`, each with `reserved` 0 and 0x77; `I2C_PASSTHRU` to the module bootloader (0x72) refused; the board still answers as the FDA image after each; `RESET` still works. Needs no `--preset`. |

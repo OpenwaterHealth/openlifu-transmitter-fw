@@ -18,5 +18,5 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run host unit tests (DEV and FDA builds)
+      - name: Run host unit tests (standard and FDA builds)
         run: sh tests/unit/run.sh

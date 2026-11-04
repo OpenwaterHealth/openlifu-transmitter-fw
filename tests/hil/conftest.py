@@ -20,6 +20,7 @@ from openlifu_sdk.io.LIFUConfig import OW_CONTROLLER, OW_ERROR
 from openlifu_sdk.io.LIFUTXDevice import LIFUTxDevice
 from openlifu_sdk.io.LIFUTXPresets import (
     compile_preset,
+    delete_preset,
     preset_id,
     store_preset,
     verify_preset,
@@ -114,11 +115,21 @@ def standard(variant):
 
 @pytest.fixture(scope="session")
 def preset_in_slot(txdevice, machine_config, standard):
-    """A standard image whose slot 0 holds this preset, stored if need be."""
+    """A standard image whose slot 0 holds this preset, stored if need be.
+
+    A preset this fixture stored is deleted again at the end of the session:
+    pages 110-125 left written stop a signed image booting under bootloader
+    1.0.1 (#56).
+    """
+    stored = False
     try:
         verify_preset(txdevice, PRESET_INDEX, machine_config)
     except Exception:
         if txdevice.get_preset_capacity() is None:
             pytest.skip("a standard image under the bootloader cannot store presets")
         store_preset(txdevice, PRESET_INDEX, machine_config)
+        stored = True
     verify_preset(txdevice, PRESET_INDEX, machine_config)
+    yield
+    if stored:
+        delete_preset(txdevice, PRESET_INDEX)
