@@ -3,8 +3,9 @@
  *
  * Which host commands a presets-only image (FDA_MODE) refuses, and which
  * ones change what a loaded preset runs. Pure: no HAL, no device state, so
- * the tables can be tested on the host (tests/unit). A standard image refuses
- * none of them, but a raw write there leaves nothing loaded (presets.h).
+ * the tables can be tested on the host (tests/unit). A standard image runs
+ * them all: a raw write there leaves nothing loaded, or is refused with
+ * OW_PRESET_BUSY while a loaded preset runs (presets.h).
  */
 
 #ifndef INC_PRESET_POLICY_H_

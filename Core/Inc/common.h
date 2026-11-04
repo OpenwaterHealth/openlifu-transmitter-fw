@@ -73,7 +73,7 @@ typedef enum {
 	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
 	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
 	OW_FDA_REFUSED = 0xF8,       // a presets-only image refuses this (preset_policy.h)
-	// Preset modes: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
+	// Presets: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
 	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
 	OW_TEMP_TOO_HIGH = 0xFA,  // above the loaded preset's start_C
 	OW_NO_PRESET = 0xFB,      // nothing loaded with OW_PRESET_LOAD yet

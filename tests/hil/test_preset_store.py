@@ -22,11 +22,10 @@ from openlifu_sdk.io.LIFUConfig import (
 from openlifu_sdk.io.LIFUTXPresets import (
     delete_preset,
     load_preset,
+    preset_slots,
     store_preset,
     verify_preset,
 )
-
-LAST_SLOT = 15
 # The retired runtime lock's command (Core/Inc/common.h).
 RETIRED_PRESET_LOCK = 0x56
 
@@ -38,15 +37,17 @@ def _trigger_json(txdevice) -> bytearray:
 def test_store_load_delete(txdevice, machine_config, preset_in_slot):
     capacity = txdevice.get_preset_capacity()
     assert capacity["slots"] == 16
+    # The last slot(s): a blob over one page needs the next slot too.
+    slot = capacity["slots"] - preset_slots(machine_config, capacity["slot_size"])
 
-    store_preset(txdevice, LAST_SLOT, machine_config)
-    verify_preset(txdevice, LAST_SLOT, machine_config)
-    load_preset(txdevice, LAST_SLOT, machine_config, duration_index=0)
+    store_preset(txdevice, slot, machine_config)
+    verify_preset(txdevice, slot, machine_config)
+    load_preset(txdevice, slot, machine_config, duration_index=0)
     state = loaded(txdevice)
-    assert state["loaded"] and state["index"] == LAST_SLOT
+    assert state["loaded"] and state["index"] == slot
 
-    delete_preset(txdevice, LAST_SLOT)
-    assert txdevice.get_preset_slot(LAST_SLOT)["state"] == "empty"
+    delete_preset(txdevice, slot)
+    assert txdevice.get_preset_slot(slot)["state"] == "empty"
     assert not loaded(txdevice)["loaded"], "deleting the loaded preset's slot unloads it"
 
 
@@ -65,7 +66,12 @@ def test_raw_write_goes_through_and_unloads(txdevice, machine_config, preset_in_
 def test_start_with_nothing_loaded_runs_the_host_config(txdevice, standard):
     for module in range(txdevice.get_module_count()):
         txdevice.unload_preset(module)
-    # The host's own trigger config, with no preset gate.
+    # The host sets its own trigger config, which also clears any profile
+    # cycle a preset installed.
+    r = send_raw(txdevice, OW_CONTROLLER, OW_CTRL_SET_SWTRIG, data=_trigger_json(txdevice))
+    assert r is not None and r.packet_type != OW_ERROR
+    assert not loaded(txdevice)["loaded"]
+    # No preset gate: an FDA_MODE image refuses this START with OW_NO_PRESET.
     txdevice.start_trigger()
     txdevice.stop_trigger()
 

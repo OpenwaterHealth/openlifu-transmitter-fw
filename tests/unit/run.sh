@@ -1,7 +1,8 @@
 #!/bin/sh
 # Host-side unit tests: build and run each test for the standard and the
-# presets-only (FDA_MODE) build. Needs a host C compiler (cc); run from the
-# repo root.
+# presets-only (FDA_MODE) build, as the firmware builds them (preset_policy.c
+# has no FDA_MODE code today, so the two agree until it does). Needs a host C
+# compiler (cc); run from the repo root.
 set -eu
 
 out=build/unit
