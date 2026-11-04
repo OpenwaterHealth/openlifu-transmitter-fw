@@ -28,6 +28,11 @@ from openlifu_sdk.io.LIFUTXPresets import (
 
 # Not in the SDK yet (Core/Inc/common.h).
 OW_PRESET_LOADED = 0x57
+OW_CTRL_GET_THERMAL_LIMITS = 0x60
+OW_CTRL_SET_THERMAL_LIMITS = 0x61
+OW_CTRL_CLEAR_THERMAL_LIMITS = 0x62
+# Where the armed limits came from (Core/Inc/thermal_limits.h).
+LIMITS_SOURCES = {0: "none", 1: "preset", 2: "host"}
 
 PRESET_INDEX = 0
 
@@ -37,6 +42,13 @@ def pytest_addoption(parser):
         "--preset",
         default=None,
         help="The preset .json the flashed image's preset 0 was generated from.",
+    )
+    parser.addoption(
+        "--shutoff-wait",
+        type=float,
+        default=300.0,
+        help="Seconds test_thermal_limits waits for the TX to warm past a shutoff_C "
+        "set just above the reading (warming the transducer by hand speeds it).",
     )
 
 
@@ -84,6 +96,36 @@ def loaded(txdevice) -> dict:
         "regs_crc": regs_crc,
         "missing": d[15],
     }
+
+
+def decode_thermal_limits(r) -> dict:
+    """A GET / SET / CLEAR_THERMAL_LIMITS reply, decoded: every one carries what is armed."""
+    assert r is not None and r.packet_type != OW_ERROR and r.data_len == 6
+    d = bytes(r.data)
+    start, shutoff = struct.unpack("<hh", d[2:6])
+    return {
+        "source": LIMITS_SOURCES[d[0]],
+        "preset_index": None if d[1] == 0xFF else d[1],
+        "x10": (start, shutoff),  # as LIFUTXPresets.thermal_limits() bakes them
+        "start_c": start / 10,
+        "shutoff_c": shutoff / 10,
+    }
+
+
+def armed_limits(txdevice) -> dict:
+    """OW_CTRL_GET_THERMAL_LIMITS, decoded."""
+    return decode_thermal_limits(send_raw(txdevice, OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS))
+
+
+def set_thermal_limits(txdevice, start_c: float, shutoff_c: float, addr: int = 0):
+    """OW_CTRL_SET_THERMAL_LIMITS, the raw reply."""
+    data = bytearray(struct.pack("<hh", round(start_c * 10), round(shutoff_c * 10)))
+    return send_raw(txdevice, OW_CONTROLLER, OW_CTRL_SET_THERMAL_LIMITS, addr=addr, data=data)
+
+
+def clear_thermal_limits(txdevice):
+    """OW_CTRL_CLEAR_THERMAL_LIMITS, the raw reply."""
+    return send_raw(txdevice, OW_CONTROLLER, OW_CTRL_CLEAR_THERMAL_LIMITS)
 
 
 @pytest.fixture(scope="session")

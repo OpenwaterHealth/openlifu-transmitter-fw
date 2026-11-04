@@ -9,7 +9,7 @@ unless a loaded preset is running. Keep the console HV off.
 import json
 
 import pytest
-from conftest import PRESET_INDEX, loaded, send_raw
+from conftest import PRESET_INDEX, clear_thermal_limits, loaded, send_raw
 from openlifu_sdk.io.LIFUConfig import (
     OW_CONTROLLER,
     OW_CTRL_SET_SWTRIG,
@@ -66,12 +66,15 @@ def test_raw_write_goes_through_and_unloads(txdevice, machine_config, preset_in_
 def test_start_with_nothing_loaded_runs_the_host_config(txdevice, standard):
     for module in range(txdevice.get_module_count()):
         txdevice.unload_preset(module)
+    # An earlier load's limits outlast it (test_thermal_limits.py): clear them.
+    r = clear_thermal_limits(txdevice)
+    assert r is not None and r.packet_type != OW_ERROR
     # The host sets its own trigger config, which also clears any profile
     # cycle a preset installed.
     r = send_raw(txdevice, OW_CONTROLLER, OW_CTRL_SET_SWTRIG, data=_trigger_json(txdevice))
     assert r is not None and r.packet_type != OW_ERROR
     assert not loaded(txdevice)["loaded"]
-    # No preset gate: an FDA_MODE image refuses this START with OW_NO_PRESET.
+    # No preset or thermal gate: an FDA_MODE image refuses this START with OW_NO_PRESET.
     txdevice.start_trigger()
     txdevice.stop_trigger()
 
