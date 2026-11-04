@@ -125,6 +125,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/demo.c
     Core/Src/presets.c
     Core/Src/preset_policy.c
+    Core/Src/thermal_limits.c
 )
 
 # ---------------------------

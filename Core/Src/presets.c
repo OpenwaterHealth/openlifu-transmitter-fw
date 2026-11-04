@@ -3,6 +3,7 @@
 #include "common.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "thermal_limits.h"
 #include "thermistor.h"
 #include "trigger.h"
 #include "tx7332.h"
@@ -17,12 +18,9 @@
 
 extern TX7332 transmitters[TX_PER_MODULE];
 
-// Thermal limits of the loaded preset; they govern START and a running
-// sequence while it stays loaded (presets_start_check(), presets_thermal_trip()).
-// Kept by value so they never depend on the blob staying where it was.
+// A load also arms the preset's thermal limits (thermal_limits.h), which
+// outlast it: unloading leaves them armed.
 static bool preset_loaded = false;
-static int16_t loaded_start_c_x10 = 0;
-static int16_t loaded_shutoff_c_x10 = 0;
 // Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it,
 // and storing over its slot unloads it.
 static PresetLoaded loaded;
@@ -427,8 +425,7 @@ static bool find_apodization(const uint8_t *p, uint32_t *value)
 
 bool presets_unload(void)
 {
-	// What a running sequence was loaded with stays: the thermal shutoff is
-	// watching its limits.
+	// A running sequence keeps what it was loaded with.
 	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
 	preset_loaded = false;
 	return true;
@@ -506,8 +503,7 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		TX7332_SetActiveDelayProfile(preset.profile_index, &transmitters[c], c);
 	}
 
-	loaded_start_c_x10 = preset.start_c_x10;
-	loaded_shutoff_c_x10 = preset.shutoff_c_x10;
+	thermal_limits_arm_preset(index, preset.start_c_x10, preset.shutoff_c_x10);
 	loaded.index = index;
 	loaded.duration_index = (uint8_t)duration_index;
 	loaded.train_count = trains;
@@ -546,18 +542,12 @@ static bool temperature_fresh(void)
 
 uint8_t presets_start_check(void)
 {
-	if (!preset_loaded) return OW_NO_PRESET;
-	if (!temperature_fresh()) return OW_TEMP_UNKNOWN;
-	if (tx_temperature * 10.0f > (float)loaded_start_c_x10) return OW_TEMP_TOO_HIGH;
-	return OW_SUCCESS;
+	return thermal_limits_start_check(preset_loaded, temperature_fresh(), tx_temperature);
 }
 
 bool presets_thermal_trip(void)
 {
-	// Nothing loaded means nothing could have started.
-	if (!preset_loaded) return false;
-	if (!temperature_fresh()) return true;
-	return tx_temperature * 10.0f >= (float)loaded_shutoff_c_x10;
+	return thermal_limits_trip(temperature_fresh(), tx_temperature);
 }
 
 // value / 10^decimals as "-1.5" (decimals 1) or "-1.52" (decimals 2): the
@@ -587,8 +577,10 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	case OW_TEMP_TOO_HIGH: {
 		// Hundredths for the reading, so 35.04 does not print as "35.0 above 35.0".
 		float t = tx_temperature * 100.0f;
+		ThermalLimits armed;
+		thermal_limits_get(&armed);
 		(void)format_fixed(now, sizeof(now), (int32_t)(t + ((t >= 0.0f) ? 0.5f : -0.5f)), 2U);
-		(void)format_fixed(limit, sizeof(limit), preset_loaded ? loaded_start_c_x10 : 0, 1U);
+		(void)format_fixed(limit, sizeof(limit), armed.start_c_x10, 1U);
 		len = snprintf(buf, size, "TX %s C above start_C %s C", now, limit);
 		break;
 	}

@@ -5,7 +5,8 @@
  *
  * Every (packet type, command, reserved) a host can send is checked against
  * the table below, which is written out by hand: the refusals must be exactly
- * those of the FDA image before the table existed (#40, #34, #43).
+ * those of the FDA image before the table existed (#40, #34, #43), plus
+ * setting or clearing the thermal limits (#59).
  *
  * Built by tests/unit/run.sh with and without -DFDA_MODE, as the firmware
  * builds it. Pass --print to list the refusals as well.
@@ -26,6 +27,8 @@ static uint8_t expected_global_refusal(uint8_t command, uint8_t reserved)
 	case OW_CMD_USR_CFG:
 		return (reserved == 1U) ? OW_FDA_REFUSED : OW_SUCCESS;
 	case OW_CMD_DFU:
+	case OW_CTRL_SET_THERMAL_LIMITS:
+	case OW_CTRL_CLEAR_THERMAL_LIMITS:
 		return OW_FDA_REFUSED;
 	default:
 		return OW_SUCCESS;
@@ -121,6 +124,15 @@ int main(int argc, char **argv)
 	check("USR_CFG read open", preset_policy_fda_refusal(OW_CMD, OW_CMD_USR_CFG, 0), OW_SUCCESS, OW_CMD, OW_CMD_USR_CFG, 0);
 	check("TX7332 read open", preset_policy_fda_refusal(OW_TX7332, OW_TX7332_RREG, 0), OW_SUCCESS, OW_TX7332, OW_TX7332_RREG, 0);
 	check("ARM_PROFILE_CYCLE not a host write", preset_policy_raw_write(OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE), 0, OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE, 0);
+	// The thermal limits are the linked preset's in FDA_MODE: the host may read
+	// them only. In a standard image setting them is not a raw write: it
+	// leaves the load alone (and is refused while a preset is loaded).
+	check("GET_THERMAL_LIMITS open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0);
+	static const uint8_t limit_writes[] = { OW_CTRL_SET_THERMAL_LIMITS, OW_CTRL_CLEAR_THERMAL_LIMITS };
+	for (unsigned i = 0; i < sizeof(limit_writes); i++) {
+		check("thermal limit write refused", preset_policy_fda_refusal(OW_CONTROLLER, limit_writes[i], 0), OW_FDA_REFUSED, OW_CONTROLLER, limit_writes[i], 0);
+		check("thermal limit write not a raw write", preset_policy_raw_write(OW_CONTROLLER, limit_writes[i]), 0, OW_CONTROLLER, limit_writes[i], 0);
+	}
 	// A standard image's preset store is not a raw write: storing or deleting
 	// unloads only the slots it changes (presets.c).
 	static const uint8_t store[] = { OW_PRESET_WRITE, OW_PRESET_COMMIT, OW_PRESET_DELETE, OW_PRESET_CAPACITY };

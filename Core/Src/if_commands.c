@@ -20,6 +20,7 @@
 #include "lifu_config.h"
 #include "presets.h"
 #include "preset_policy.h"
+#include "thermal_limits.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -771,25 +772,18 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-			// The loaded preset's start_C decides; checked before anything is
-			// armed, so a refusal leaves no state to unwind. In FDA_MODE a
-			// preset must be loaded; a standard image with none loaded runs
-			// the host's own configuration.
-#ifdef FDA_MODE
-			const bool gated = true;
-#else
-			const bool gated = presets_loaded();
-#endif
-			if (gated) {
+			// The armed start_C decides, whether or not a preset is still
+			// loaded; checked before anything is armed, so a refusal leaves no
+			// state to unwind. In FDA_MODE a preset must be loaded; a standard
+			// image with no limits armed runs the host's own configuration.
+			uint8_t refused = presets_start_check();
+			if (refused != OW_SUCCESS) {
 				static char reason[64];
-				uint8_t refused = presets_start_check();
-				if (refused != OW_SUCCESS) {
-					uartResp->reserved = refused;
-					uartResp->data_len = presets_start_refusal(refused, reason, sizeof(reason));
-					uartResp->data = (uint8_t *)reason;
-					uartResp->packet_type = OW_ERROR;
-					break;
-				}
+				uartResp->reserved = refused;
+				uartResp->data_len = presets_start_refusal(refused, reason, sizeof(reason));
+				uartResp->data = (uint8_t *)reason;
+				uartResp->packet_type = OW_ERROR;
+				break;
 			}
 
 			// Check if auto-cycle should be enabled
@@ -1428,6 +1422,51 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->data_len = preset_loaded_reply(cmd, loaded_reply);
 			uartResp->data = loaded_reply;
 			break;
+		case OW_CTRL_GET_THERMAL_LIMITS:
+#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+		case OW_CTRL_SET_THERMAL_LIMITS:
+		case OW_CTRL_CLEAR_THERMAL_LIMITS:
+#endif
+		{
+			// The master's limits are the ones that act (thermal_limits.h).
+			static uint8_t limits_reply[6];
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			uint8_t result = (module_id == 0x00) ? OW_SUCCESS : OW_INVALID_PACKET;
+#ifndef FDA_MODE
+			bool running = get_trigger_status() == TRIGGER_STATUS_RUNNING;
+			if (result == OW_SUCCESS && cmd->command == OW_CTRL_SET_THERMAL_LIMITS) {
+				// Payload: start_C and shutoff_C, i16 tenths of a degree C, LE.
+				result = OW_INVALID_PACKET;
+				if (cmd->data != NULL && cmd->data_len == 4U) {
+					int16_t start = (int16_t)(cmd->data[0] | ((uint16_t)cmd->data[1] << 8));
+					int16_t shutoff = (int16_t)(cmd->data[2] | ((uint16_t)cmd->data[3] << 8));
+					result = thermal_limits_set(start, shutoff, presets_loaded(), running);
+				}
+			} else if (result == OW_SUCCESS && cmd->command == OW_CTRL_CLEAR_THERMAL_LIMITS) {
+				result = thermal_limits_clear(presets_loaded(), running);
+			}
+#endif
+			if (result != OW_SUCCESS) {
+				uartResp->reserved = result;
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+			// Every reply carries what is armed now, so SET and CLEAR confirm it.
+			ThermalLimits armed;
+			thermal_limits_get(&armed);
+			limits_reply[0] = armed.source;
+			limits_reply[1] = armed.preset_index;
+			limits_reply[2] = (uint8_t)((uint16_t)armed.start_c_x10);
+			limits_reply[3] = (uint8_t)((uint16_t)armed.start_c_x10 >> 8);
+			limits_reply[4] = (uint8_t)((uint16_t)armed.shutoff_c_x10);
+			limits_reply[5] = (uint8_t)((uint16_t)armed.shutoff_c_x10 >> 8);
+			uartResp->data_len = sizeof(limits_reply);
+			uartResp->data = limits_reply;
+			break;
+		}
 #ifdef PRESET_STORE
 		case OW_PRESET_CAPACITY: {
 			// What there is to fill, from this module's own slots like GET:
