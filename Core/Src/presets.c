@@ -1,10 +1,9 @@
 #include "presets.h"
 
-#ifdef PRESETS_ENABLED
-
 #include "common.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "thermal_limits.h"
 #include "thermistor.h"
 #include "trigger.h"
 #include "tx7332.h"
@@ -13,22 +12,26 @@
 #include <string.h>
 
 #include "memory_map.h"
-#ifdef PRESET_MODE
+#ifdef PRESET_STORE
 #include "flash_eeprom.h"
 #endif
 
 extern TX7332 transmitters[TX_PER_MODULE];
 
-// Thermal limits of the preset the chips were last programmed from; they
-// govern every start until another load replaces them. Kept by value so they
-// never depend on the blob staying where it was.
+// A load also arms the preset's thermal limits (thermal_limits.h), which
+// outlast it: unloading leaves them armed.
 static bool preset_loaded = false;
-static int16_t loaded_start_c_x10 = 0;
-static int16_t loaded_shutoff_c_x10 = 0;
-#ifdef PRESET_MODE
-// Which slot that was, so storing over it unloads it.
-static uint8_t loaded_index = 0;
-#endif
+// Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it,
+// and storing over its slot unloads it.
+static PresetLoaded loaded;
+
+// A sequence is under way, running or paused to resume on what it was loaded
+// with: the presets, and the registers they set, cannot change now.
+static bool sequence_under_way(void)
+{
+	uint8_t status = get_trigger_status();
+	return status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED;
+}
 
 // Where one preset's blob is, and how long.
 typedef struct {
@@ -121,9 +124,11 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	if (out->train_count_len < 1U) return false;
 	if (!take(&c, 4U * (uint32_t)out->train_count_len, &out->train_counts)) return false;
 
-	if (!take(&c, 4U, &f)) return false;
+	if (!take(&c, 6U, &f)) return false;
 	out->start_c_x10 = (int16_t)rd_u16(&f[0]);
 	out->shutoff_c_x10 = (int16_t)rd_u16(&f[2]);
+	out->treatment_timeout_s = rd_u16(&f[4]);
+	if (out->treatment_timeout_s < 1U) return false;
 
 	out->chips = c.p;
 	for (uint8_t chip = 0; chip < out->chip_count; chip++) {
@@ -135,7 +140,7 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	return c.p == c.end;
 }
 
-#ifdef PRESET_MODE
+#ifndef FDA_MODE
 
 _Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESETS_SIZE,
                "the slots must fill the reserved pages exactly");
@@ -192,7 +197,7 @@ static bool slot_blob(uint8_t slot, PresetBlob *out)
 	return true;
 }
 
-#else /* PRESET_MODE */
+#else /* FDA_MODE */
 
 // The one preset, from the SDK. The linker puts it right after the code
 // (.fda_preset); it is read from there, so what runs is what was flashed.
@@ -210,12 +215,12 @@ static bool fda_blob(PresetBlob *out)
 	return true;
 }
 
-#endif /* PRESET_MODE */
+#endif /* FDA_MODE */
 
 uint8_t presets_slot_state(uint8_t slot)
 {
 	if (slot >= PRESET_COUNT) return OW_INVALID_PACKET;
-#ifdef PRESET_MODE
+#ifndef FDA_MODE
 	bool tail;
 	if (slot_len(slot, &tail) != 0U) return OW_SUCCESS;
 	return tail ? OW_PRESET_SLOT_TAIL : OW_PRESET_EMPTY;
@@ -225,7 +230,7 @@ uint8_t presets_slot_state(uint8_t slot)
 #endif
 }
 
-#ifdef PRESET_MODE
+#ifdef PRESET_STORE
 
 // The upload in progress; one at a time, and offset 0 starts over.
 static uint8_t stage[PRESET_BLOB_MAX];
@@ -243,7 +248,7 @@ static bool blob_valid(const uint8_t *data, uint32_t len)
 // among them, nothing counts as loaded until the next load.
 static void slots_changing(uint8_t first, uint8_t count)
 {
-	if (preset_loaded && loaded_index >= first && (uint8_t)(loaded_index - first) < count) {
+	if (preset_loaded && loaded.index >= first && (uint8_t)(loaded.index - first) < count) {
 		preset_loaded = false;
 	}
 }
@@ -291,8 +296,9 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
 	uint8_t next = (uint8_t)(slot + 1U);
 	if (new_slots > old_slots && (next >= PRESET_SLOTS || header_len(next) != 0U)) return OW_PRESET_NO_ROOM;
 
-	// A flash erase stalls the core for milliseconds, trigger ISRs included.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	// A flash erase stalls the core for milliseconds, trigger ISRs included,
+	// and storing over the loaded slot would unload a paused sequence.
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	// Erase whatever the old blob held as well, so a shorter one frees its second slot.
 	uint8_t span = (new_slots > old_slots) ? new_slots : old_slots;
@@ -316,7 +322,7 @@ uint8_t presets_delete(uint8_t slot)
 	uint32_t len = slot_len(slot, &tail);
 	if (tail) return OW_PRESET_SLOT_TAIL;
 	if (len == 0U) return OW_SUCCESS;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	uint32_t base = slot_address(slot);
 	slots_changing(slot, slots_for(len));
@@ -324,7 +330,7 @@ uint8_t presets_delete(uint8_t slot)
 	return OW_SUCCESS;
 }
 
-#endif /* PRESET_MODE */
+#endif /* PRESET_STORE */
 
 uint8_t presets_count(void)
 {
@@ -334,7 +340,7 @@ uint8_t presets_count(void)
 bool presets_get(uint8_t index, Preset *out)
 {
 	PresetBlob blob;
-#ifdef PRESET_MODE
+#ifndef FDA_MODE
 	if (index >= PRESET_COUNT || !slot_blob(index, &blob)) return false;
 #else
 	if (index != 0U || !fda_blob(&blob)) return false;
@@ -432,8 +438,7 @@ bool presets_unload(void)
 {
 	// What a running sequence was loaded with stays: the thermal shutoff is
 	// watching its limits. A paused one resumes on them.
-	uint8_t status = get_trigger_status();
-	if (status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED) return false;
+	if (sequence_under_way()) return false;
 	preset_loaded = false;
 	return true;
 }
@@ -444,7 +449,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	// Rewriting the delay and pattern registers underneath a running sequence
 	// would change the output mid-burst. Otherwise any refusal, or a load that
 	// fails part way, leaves nothing loaded, so the trigger cannot start on an
-	// earlier load the host no longer matches.
+	// earlier load the host no longer matches. A timed-out sequence is ended
+	// with STOP first, as the SDK does, so the load cannot hide the TIMEOUT.
+	if (get_trigger_status() == TRIGGER_STATUS_TIMEOUT) return false;
 	if (!presets_unload()) return false;
 
 	Preset preset;
@@ -492,9 +499,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		return false;
 	}
 
-	// The preset owns its sequence timing and its run-length choices, so the
-	// host never sends SET_SWTRIG in a preset mode -- which matters because
-	// that clears the profile cycle.
+	// The preset owns its sequence timing and its run-length choices: an
+	// FDA_MODE image refuses SET_SWTRIG, and a standard one unloads the
+	// preset on it (it would also clear the profile cycle installed above).
 	uint32_t trains = presets_train_count(&preset, (uint8_t)duration_index);
 	if (!trigger_set_config(preset.trig_frequency_hz,
 	                        PRESET_TRIGGER_PULSE_WIDTH_US,
@@ -510,12 +517,35 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		TX7332_SetActiveDelayProfile(preset.profile_index, &transmitters[c], c);
 	}
 
-	loaded_start_c_x10 = preset.start_c_x10;
-	loaded_shutoff_c_x10 = preset.shutoff_c_x10;
-#ifdef PRESET_MODE
-	loaded_index = index;
-#endif
+	thermal_limits_arm_preset(index, preset.start_c_x10, preset.shutoff_c_x10,
+	                          preset.treatment_timeout_s);
+	loaded.index = index;
+	loaded.duration_index = (uint8_t)duration_index;
+	loaded.train_count = trains;
+	loaded.settings_crc = preset.settings_crc;
+	loaded.regs_crc = crc;
 	preset_loaded = true;
+	return true;
+}
+
+bool presets_raw_write(bool here)
+{
+	// A raw write while nothing is loaded is the research case: let it be.
+	if (!preset_loaded) return true;
+	if (sequence_under_way()) return false;
+	if (here) preset_loaded = false;
+	return true;
+}
+
+bool presets_loaded(void)
+{
+	return preset_loaded;
+}
+
+bool presets_loaded_info(PresetLoaded *out)
+{
+	if (!preset_loaded) return false;
+	*out = loaded;
 	return true;
 }
 
@@ -527,18 +557,12 @@ static bool temperature_fresh(void)
 
 uint8_t presets_start_check(void)
 {
-	if (!preset_loaded) return OW_NO_PRESET;
-	if (!temperature_fresh()) return OW_TEMP_UNKNOWN;
-	if (tx_temperature * 10.0f > (float)loaded_start_c_x10) return OW_TEMP_TOO_HIGH;
-	return OW_SUCCESS;
+	return thermal_limits_start_check(preset_loaded, temperature_fresh(), tx_temperature);
 }
 
-bool presets_thermal_trip(void)
+uint8_t presets_shutoff_check(void)
 {
-	// Nothing loaded means nothing could have started.
-	if (!preset_loaded) return false;
-	if (!temperature_fresh()) return true;
-	return tx_temperature * 10.0f >= (float)loaded_shutoff_c_x10;
+	return thermal_limits_shutoff_check(temperature_fresh(), tx_temperature);
 }
 
 // value / 10^decimals as "-1.5" (decimals 1) or "-1.52" (decimals 2): the
@@ -568,8 +592,10 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	case OW_TEMP_TOO_HIGH: {
 		// Hundredths for the reading, so 35.04 does not print as "35.0 above 35.0".
 		float t = tx_temperature * 100.0f;
+		ThermalLimits armed;
+		thermal_limits_get(&armed);
 		(void)format_fixed(now, sizeof(now), (int32_t)(t + ((t >= 0.0f) ? 0.5f : -0.5f)), 2U);
-		(void)format_fixed(limit, sizeof(limit), preset_loaded ? loaded_start_c_x10 : 0, 1U);
+		(void)format_fixed(limit, sizeof(limit), armed.start_c_x10, 1U);
 		len = snprintf(buf, size, "TX %s C above start_C %s C", now, limit);
 		break;
 	}
@@ -580,5 +606,3 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	if (len < 0) return 0U;
 	return (len >= (int)size) ? (uint16_t)(size - 1U) : (uint16_t)len;
 }
-
-#endif /* PRESETS_ENABLED */

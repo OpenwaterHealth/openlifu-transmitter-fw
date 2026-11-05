@@ -66,15 +66,18 @@ typedef enum {
 
 typedef enum {
 	OW_SUCCESS = 0x00,
-	// PRESET_MODE: why a preset could not be stored or deleted (presets.h).
-	OW_PRESET_BUSY = 0xF2,       // trigger running; the presets cannot change now
+	// Why a preset could not be stored or deleted (presets.h).
+	OW_PRESET_BUSY = 0xF2,       // sequence running or paused; the presets cannot change now
+	                             //   (also: a raw write while a loaded preset runs or is paused,
+	                             //   or setting or clearing the thermal limits then)
 	OW_PRESET_NO_ROOM = 0xF3,    // blob needs the next slot too, and it is taken or missing
 	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
 	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
-	OW_FDA_REFUSED = 0xF8,       // FDA mode: the user config is read-only
-	// Preset modes: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
-	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
-	OW_TEMP_TOO_HIGH = 0xFA,  // above the loaded preset's start_C
+	OW_FDA_REFUSED = 0xF8,       // a presets-only image refuses this (preset_policy.h)
+	// Presets: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
+	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading (START or RESUME)
+	OW_TEMP_TOO_HIGH = 0xFA,  // START: above the armed start_C; RESUME: at or above the
+	                          //   armed shutoff_C, or the overheat trip (thermal_limits.h)
 	OW_NO_PRESET = 0xFB,      // nothing loaded with OW_PRESET_LOAD yet
 	OW_UNKNOWN_COMMAND = 0xFC,
 	OW_BAD_CRC = 0xFD,
@@ -152,16 +155,17 @@ typedef enum {
 	OW_AFE_ENUM_TX7332 = 0x31,
 } UstxAfeCommands;
 
-// Operator presets (see presets.h), FDA_MODE and PRESET_MODE builds only.
-// Command bytes are unique across every packet type (the SDK keeps one
-// command -> packet-type map), so these sit at 0x50, clear of the power
-// board's 0x30-0x43 block.
+// Operator presets (see presets.h). Command bytes are unique across every
+// packet type (the SDK keeps one command -> packet-type map), so these sit at
+// 0x50, clear of the power board's 0x30-0x43 block.
 //
 // GET and CAPACITY answer from the master's flash and are never forwarded.
 // LOAD is forwarded: each module programs its own TX7332 chips and checks the
-// CRC against its own copy. WRITE, COMMIT, DELETE and CAPACITY exist in
-// PRESET_MODE only; the three that change the presets are forwarded too,
-// since each module keeps its own.
+// CRC against its own copy. WRITE, COMMIT, DELETE and CAPACITY exist in a
+// bare-metal standard image only (PRESET_STORE); the three that change the
+// presets are forwarded too, since each module keeps its own. LOADED asks
+// every module (if_commands.c). 0x56 was the runtime lock's command; do not
+// reuse it.
 typedef enum {
 	OW_PRESET_GET = 0x50,   // reserved=index -> count, index, chips, profiles,
 	                        //   settings_crc u32, regs_crc u32, id_len, id
@@ -176,7 +180,27 @@ typedef enum {
 	OW_PRESET_DELETE = 0x54,// reserved=slot; empties it
 	OW_PRESET_CAPACITY = 0x55, // -> slots, free slots, slot size u16,
 	                        //   largest blob u16 (both LE)
+	OW_PRESET_LOADED = 0x57,// -> 16 bytes: what every module has loaded, or
+	                        //   nothing (if_commands.c, preset_loaded_reply)
 } UstxPresetCommands;
+
+// Thermal limits, start_C and shutoff_C, and the treatment timeout
+// (thermal_limits.h): armed by
+// OW_PRESET_LOAD or, in a standard image, by the host, and kept apart from
+// the load. Only the master runs the trigger, so these address module 0 and
+// are never forwarded. SET and CLEAR are not built into an FDA_MODE image,
+// which refuses them (preset_policy.c). Clear of the presets' 0x50-0x5F.
+typedef enum {
+	OW_CTRL_GET_THERMAL_LIMITS = 0x60,   // -> source (ThermalLimitsSource), preset index (0xFF
+	                                     //   unless from a preset), start_C x10 i16,
+	                                     //   shutoff_C x10 i16, treatment_timeout_s u16
+	                                     //   (0: none) (LE): 8 bytes
+	OW_CTRL_SET_THERMAL_LIMITS = 0x61,   // data = start_C x10 i16, shutoff_C x10 i16,
+	                                     //   treatment_timeout_s u16 (0: none) (LE);
+	                                     //   start_C must be below shutoff_C
+	OW_CTRL_CLEAR_THERMAL_LIMITS = 0x62, // none armed afterwards. SET and CLEAR unload a
+	                                     //   loaded preset, as a raw write does
+} UstxThermalLimitCommands;
 
 typedef struct  {
 	uint16_t id;

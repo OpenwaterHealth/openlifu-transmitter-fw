@@ -52,15 +52,7 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-message(STATUS "FW version   : ${FW_GIT_DESCRIBE}")
-message(STATUS "FW git sha   : ${FW_GIT_SHA}")
-message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
-
-configure_file(
-    ${CMAKE_SOURCE_DIR}/version.h.in
-    ${CMAKE_BINARY_DIR}/generated/version.h
-    @ONLY
-)
+# version.h is configured below, once FDA_MODE sets the build variant.
 
 # Set the project name
 set(CMAKE_PROJECT_NAME lifu-transmitter-fw)
@@ -132,25 +124,34 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/utils.c
     Core/Src/demo.c
     Core/Src/presets.c
+    Core/Src/preset_policy.c
+    Core/Src/thermal_limits.c
 )
 
 # ---------------------------
 # FDA mode
 # ---------------------------
-# In both preset modes the firmware programs the TX7332 chips from a preset
-# and refuses host register writes (Core/Inc/presets.h).
+# Two builds (Core/Inc/presets.h):
 #
-# FDA_MODE links one read-only preset into the image right after the code, so
-# the signature covers it. Its header, Core/Inc/presets/fda_preset.h, comes
-# from the openlifu SDK's examples/generate_presets.py.
+# FDA_MODE, a presets-only image, links one read-only preset into the image
+# right after the code, so the signature covers it: the host loads the preset
+# and can change nothing else (preset_policy.c). Its header,
+# Core/Inc/presets/fda_preset.h, comes from the openlifu SDK's
+# examples/generate_presets.py.
 #
-# PRESET_MODE keeps writable presets in pages 110-125. It needs the bootloader
-# whose slot ends at page 109.
+# Every other build is a standard image: the host owns the TX7332 registers
+# and the trigger, and may also load presets from pages 110-125. Only a
+# bare-metal standard image can store presets there, since the bootloader's
+# slot still covers pages 110-125.
 option(FDA_MODE "One read-only preset, linked into the image" OFF)
-option(PRESET_MODE "Writable presets in pages 110-125" OFF)
 
-if(FDA_MODE AND PRESET_MODE)
-    message(FATAL_ERROR "FDA_MODE and PRESET_MODE cannot both be ON.")
+# A presets-only (FDA_MODE) image reports which preset set it carries:
+# "fda" (the released preset) or "test" (the test presets). It must match a
+# preset context in openlifu-diathermy-application.
+set(FW_PRESET_VARIANT "fda" CACHE STRING "Preset set in a presets-only image: fda or test")
+set_property(CACHE FW_PRESET_VARIANT PROPERTY STRINGS fda test)
+if(NOT FW_PRESET_VARIANT MATCHES "^(fda|test)$")
+    message(FATAL_ERROR "FW_PRESET_VARIANT must be fda or test, not '${FW_PRESET_VARIANT}'.")
 endif()
 
 if(FDA_MODE)
@@ -159,16 +160,35 @@ if(FDA_MODE)
         message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER}: generate it with the openlifu SDK's "
                             "examples/generate_presets.py.")
     endif()
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESETS_ENABLED)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
+    set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 
-    message(STATUS "FDA mode    : ON (preset linked in after the code)")
-elseif(PRESET_MODE)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PRESET_MODE PRESETS_ENABLED)
-
-    message(STATUS "Preset mode : ON (presets in flash slots)")
+    message(STATUS "FDA mode    : ON (preset linked in after the code, host writes refused)")
 else()
-    message(STATUS "FDA mode    : OFF (host owns the TX7332 registers)")
+    set(FW_BUILD_VARIANT "")
+    message(STATUS "FDA mode    : OFF (standard: host control, preset slots at pages 110-125)")
 endif()
+
+# OW_CMD_VERSION returns FW_VERSION. A presets-only image appends
+# "+<FW_PRESET_VARIANT>" (semver build metadata), so the host can tell which
+# preset set it carries without writing to the device. Any other build has no
+# suffix: all commands are enabled and the host treats it as a development or
+# service image.
+if(FW_BUILD_VARIANT)
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${FW_BUILD_VARIANT}")
+else()
+    set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}")
+endif()
+
+message(STATUS "FW version   : ${FW_VERSION_STRING}")
+message(STATUS "FW git sha   : ${FW_GIT_SHA}")
+message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/version.h.in
+    ${CMAKE_BINARY_DIR}/generated/version.h
+    @ONLY
+)
 
 if(DEBUG_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/logging.c)

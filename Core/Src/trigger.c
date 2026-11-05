@@ -2,6 +2,8 @@
 #include "main.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "thermal_limits.h"
+#include "usb_events.h"
 
 #include "jsmn.h"
 
@@ -26,6 +28,10 @@ static volatile bool _pause_pending = false;
 static volatile bool _resume_wait = false;   // HIRES is running out that gap
 static volatile uint32_t _gap_elapsed_us = 0;  // of the last train's period, at the pause
 static volatile uint32_t _paused_tick = 0;
+
+// Treatment timeout: START begins the clock, and pauses do not hold it. The
+// timeout itself is armed with the thermal limits (thermal_limits.h).
+static volatile uint32_t _run_start_tick = 0;
 
 static volatile OW_TimerData _timerDataConfig = {
 		.TriggerFrequencyHz = 0,
@@ -98,7 +104,8 @@ static void timerDataToJson(char *jsonString, size_t max_length)
 			  _timerDataConfig.ProfileIncrement,
 			  (unsigned long)_trainCount,
 			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_RUNNING ? "RUNNING" :
-			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ? "PAUSED" : "STOPPED");
+			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ? "PAUSED" :
+			  _timerDataConfig.TriggerStatus == TRIGGER_STATUS_TIMEOUT ? "TIMEOUT" : "STOPPED");
 }
 
 static int jsonToTimerData(const char *jsonString)
@@ -317,6 +324,9 @@ void print_OW_TimerData(const OW_TimerData *data) {
     case TRIGGER_STATUS_PAUSED:
         printf("TriggerStatus: PAUSED\r\n");
     	break;
+    case TRIGGER_STATUS_TIMEOUT:
+        printf("TriggerStatus: TIMEOUT\r\n");
+    	break;
     default:
         printf("TriggerStatus: NOT_CONFIGURED\r\n");
     	break;
@@ -339,7 +349,7 @@ uint32_t get_trigger_train_count(void)
 }
 
 // Apply a trigger configuration directly, without going through the JSON that
-// the host would normally send. The preset modes use this: the timing belongs
+// the host would normally send. Loading a preset uses this: the timing belongs
 // to the preset, so loading one configures the sequence as well as the chips.
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,
                         uint32_t pulse_count, uint32_t train_interval_us,
@@ -611,6 +621,7 @@ uint8_t start_trigger_pulse(void) {
     if(_timerDataConfig.TriggerPulseTrainInterval>0) {
         HAL_TIM_Base_Start_IT(&HIRES_TIMER);
     }
+    _run_start_tick = HAL_GetTick();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_RUNNING;
     return TRIGGER_STATUS_RUNNING;
 }
@@ -625,8 +636,9 @@ uint8_t stop_trigger_pulse(void) {
     _pause_pending = false;
     _resume_wait = false;
 
-	// Paused: the timers are already stopped and the pin parked.
-	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED) {
+	// Paused or timed out: the timers are already stopped and the pin parked.
+	if (_timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED ||
+	    _timerDataConfig.TriggerStatus == TRIGGER_STATUS_TIMEOUT) {
 		_timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
 		return TRIGGER_STATUS_READY;
 	}
@@ -640,6 +652,29 @@ uint8_t stop_trigger_pulse(void) {
     trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
     return TRIGGER_STATUS_READY;
+}
+
+// Set in the USB interrupt, acted on by the main loop: a stop from the
+// interrupt could land inside START or RESUME and be overwritten (SR-015).
+static volatile bool _host_lost = false;
+
+static void trigger_usb_event_cb(usb_event_t event)
+{
+    (void)event;
+    _host_lost = true;
+}
+
+bool trigger_take_host_lost(void)
+{
+    if (!_host_lost) return false;
+    _host_lost = false;
+    return true;
+}
+
+void trigger_register_interlock(void)
+{
+    usb_register_callback(USB_EVENT_PORT_CLOSE, trigger_usb_event_cb);
+    usb_register_callback(USB_EVENT_DISCONNECT, trigger_usb_event_cb);
 }
 
 static void finish_sequence(void)
@@ -793,10 +828,20 @@ bool resume_trigger_pulse(void)
 	return true;
 }
 
-bool trigger_pause_expired(void)
+bool trigger_timeout_expired(void)
 {
-	return _timerDataConfig.TriggerStatus == TRIGGER_STATUS_PAUSED &&
-	       (HAL_GetTick() - _paused_tick) >= TRIGGER_PAUSE_TIMEOUT_S * 1000U;
+	uint8_t status = _timerDataConfig.TriggerStatus;
+	return (status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED) &&
+	       thermal_limits_timed_out(HAL_GetTick() - _run_start_tick);
+}
+
+void trigger_end_timeout(void)
+{
+	// The final train went out before the stop landed: that is a completion.
+	if (_timerDataConfig.TriggerStatus != TRIGGER_STATUS_READY ||
+	    _trainCount >= _timerDataConfig.TriggerPulseTrainCount) return;
+	_timerDataConfig.TriggerStatus = TRIGGER_STATUS_TIMEOUT;
+	sequence_timeout_callback(_trainCount, _timerDataConfig.TriggerPulseTrainCount);
 }
 
 void TRIG_TIM2_IRQHandler(void) {

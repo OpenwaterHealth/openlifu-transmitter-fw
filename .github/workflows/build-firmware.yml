@@ -115,6 +115,8 @@ jobs:
             bash -lc "git config --global --add safe.directory /workspace && cmake --preset Release && cmake --build build/Release --config Release --target all -j 10"
 
       # Bare-metal image: standalone at 0x08000000, no bootloader (BARE_METAL=ON).
+      # A dev/debug image: built and uploaded as a workflow artifact on every
+      # run, but deliberately NOT attached to GitHub releases.
       - name: Build bare-metal image (@0x08000000)
         run: |
           docker run --rm \
@@ -302,10 +304,10 @@ jobs:
           cp "build/Release-BareMetal/lifu-transmitter-fw.bin" _artifacts/openlifu-transmitter-fw-baremetal.bin
           cp "build/Release-BareMetal/lifu-transmitter-fw.hex" _artifacts/openlifu-transmitter-fw-baremetal.hex
 
-      # Upload as three separate, clearly-named artifacts:
-      #   - baremetal  : standalone app @0x08000000 (no bootloader)
+      # Upload as separate, clearly-named artifacts:
       #   - signed     : app @0x08010400 signed for the bootloader slot
       #   - production : bootloader + signed app, single factory image
+      #   - baremetal  : standalone app @0x08000000 (no bootloader), not released
       - name: Upload bare-metal artifact
         uses: actions/upload-artifact@v4
         with:
@@ -390,9 +392,8 @@ jobs:
           prerelease: ${{ steps.reltype.outputs.prerelease }}
           body_path: notes.md
           make_latest: ${{ steps.reltype.outputs.prerelease == 'false' }}
+          # Bare-metal is a dev/debug image and is deliberately NOT released.
           files: |
-            _artifacts/openlifu-transmitter-fw-baremetal.bin
-            _artifacts/openlifu-transmitter-fw-baremetal.hex
             _artifacts/openlifu-transmitter-fw-signed.bin
             _artifacts/openlifu-transmitter-fw-production.bin
             _artifacts/openlifu-transmitter-fw-production.hex

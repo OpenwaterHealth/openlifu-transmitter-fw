@@ -2,17 +2,36 @@
  * presets.h
  *
  * Presets the firmware -- not the host -- programs the TX7332 chips from. The
- * host picks one with OW_PRESET_LOAD; host register writes are refused.
+ * host picks one with OW_PRESET_LOAD.
  *
- *   FDA_MODE     one preset, linked into the image right after the code
- *                (the linker scripts' .fda_preset section), from
- *                Core/Inc/presets/fda_preset.h, so the signature covers it.
- *                Flashing or updating the image writes it; nothing in the
- *                image writes it, or the user config.
- *   PRESET_MODE  presets in pages 110-125, above the application slot, which
- *                the host stores and deletes: 16 slots of one page, slot N
- *                being preset index N. A blob longer than a page runs on into
- *                the next slot, which then has no preset of its own.
+ *   FDA_MODE  a presets-only image (+fda, +test): one preset, linked into
+ *             the image right after the code (the linker scripts'
+ *             .fda_preset section), so the signature covers it, from
+ *             Core/Inc/presets/fda_preset.h. Flashing or updating the image
+ *             writes it; nothing in the image writes it, or the user config.
+ *             The host may load the preset and change nothing else: not the
+ *             registers, the trigger, the user config or the firmware
+ *             (preset_policy.h).
+ *   standard  every other build: presets in pages 110-125, above the
+ *             application slot: 16 slots of one page, slot N being preset
+ *             index N. A blob longer than a page runs on into the next slot,
+ *             which then has no preset of its own. The host also keeps the
+ *             registers and the trigger: a raw register, profile or trigger
+ *             write leaves nothing loaded on the module that runs it, and is
+ *             refused (OW_PRESET_BUSY) while a loaded preset runs or is
+ *             paused.
+ *
+ * Each module keeps its own load: a raw write to one module's chips unloads
+ * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
+ * every module on the same preset is the host's job; configuring modules
+ * differently is a research use of the low-level commands. A raw write the
+ * handler then rejects has still unloaded: a preset counts as loaded only on
+ * the happy path.
+ *
+ * Only a bare-metal standard image stores presets (PRESET_STORE). Under the
+ * bootloader, pages 110-125 are the end of its slot, which it checks are
+ * erased at every boot, so a stored preset would stop the image booting; a
+ * signed standard image therefore finds every slot empty.
  *
  * A module programs only its own chips, so a preset spanning modules is one
  * blob per module, in that module's own flash, with its own regs_crc.
@@ -22,21 +41,28 @@
  *   settings_crc  over the preset .json the blob was generated from
  *   regs_crc      over the blob's body, everything the firmware executes from
  *
- * Once a preset is loaded the trigger will not start above its start_C (or
- * without a fresh reading), and a running sequence stops at its shutoff_C.
- * With nothing loaded the trigger does not start.
+ * A load also arms the preset's start_C, shutoff_C and treatment_timeout_s
+ * (thermal_limits.h): the trigger will not start above start_C (or without a
+ * fresh reading), a running sequence stops at shutoff_C, a paused one will
+ * not resume at it (OW_TEMP_TOO_HIGH, as START above start_C), and a running
+ * or paused one ends as TIMEOUT once treatment_timeout_s has passed since
+ * START. The limits outlast the load: a
+ * raw write, an unload or a timeout leaves them armed. With nothing loaded, an
+ * FDA_MODE image's trigger does not start; a standard image's runs on the
+ * host's own configuration, under whatever limits are armed.
  *
  * A stored upload is staged in RAM and written only once all of it has
  * arrived and checks out; its magic is programmed last, so a write cut short
  * leaves a slot that reads as empty.
- *
- * Nothing here exists unless FDA_MODE or PRESET_MODE defines PRESETS_ENABLED.
  */
 
 #ifndef INC_PRESETS_H_
 #define INC_PRESETS_H_
 
-#ifdef PRESETS_ENABLED
+// USER_VECT_TAB_ADDRESS is set for every image that runs under the bootloader.
+#if !defined(FDA_MODE) && !defined(USER_VECT_TAB_ADDRESS)
+#define PRESET_STORE
+#endif
 
 #include "tx7332.h"
 
@@ -69,19 +95,24 @@
  *     u32 trig_frequency_hz, u32 trig_pulse_count, u32 trig_train_interval_us
  *     u8  train_count_len, u32 train_counts[train_count_len]
  *     i16 start_c_x10, i16 shutoff_c_x10
+ *     u16 treatment_timeout_s  total time from START, pauses included, after
+ *                            which the run ends as TIMEOUT (SR-024); >= 1,
+ *                            so every preset has one (only the host's
+ *                            SET_THERMAL_LIMITS may arm none)
  *     per chip:
  *       the base registers, as runs of consecutive addresses:
  *         u16 run_count, then per run: u16 start_addr, u16 n, u32 value[n]
  *       per profile, the registers each profile switch rewrites:
  *         u16 count, then per register: u16 addr, u32 value
  */
-#define PRESET_BLOB_VERSION 1u
+// 2 added treatment_timeout_s; a version 1 blob is refused, not defaulted.
+#define PRESET_BLOB_VERSION 2u
 
 #define PRESET_SLOTS       16u
 #define PRESET_SLOT_SIZE   2048u                       // one flash page
 #define PRESET_BLOB_MAX    (2u * PRESET_SLOT_SIZE)     // a blob may take two slots
 
-// Preset indexes: FDA mode runs one preset, from slot 0.
+// Preset indexes: FDA mode runs one preset, from slot 0; standard has every slot.
 #ifdef FDA_MODE
 #define PRESET_COUNT 1u
 #else
@@ -113,6 +144,8 @@ typedef struct {
 	// TX thermistor limits, tenths of a degree C (start_C / shutoff_C).
 	int16_t start_c_x10;
 	int16_t shutoff_c_x10;
+	// Treatment timeout, seconds from START (treatment_timeout_s).
+	uint16_t treatment_timeout_s;
 	uint32_t settings_crc;             // CRC-32 of the source .json bytes
 	uint32_t regs_crc;                 // CRC-32 of the body, as generated
 	const uint8_t *body;               // what regs_crc covers
@@ -165,33 +198,64 @@ uint32_t presets_regs_crc(const Preset *preset);
  * execution order so the trigger ISRs can cycle profiles, applies the
  * preset's trigger timing, and activates its starting profile.
  *
- * A refusal leaves nothing loaded, except while a trigger is running, when
- * the load in use is left as it is.
+ * A refusal leaves nothing loaded, except while a sequence is running or
+ * paused, when the load in use is left as it is.
  *
  * @param duration_index        which of the preset's train_counts to run.
  * @param expected_regs_crc     the regs_crc the host computed for this preset.
  * @param expected_settings_crc the CRC-32 of the host's preset file.
  * @return true on success; false on a bad index, a duration index the
- *         preset does not offer, a CRC mismatch, or if a trigger is running.
+ *         preset does not offer, a CRC mismatch, or if a sequence is running or
+ *         paused.
  */
 bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs_crc,
                   uint32_t expected_settings_crc);
 
 /**
- * @brief  Leave nothing loaded, so the trigger refuses to start.
+ * @brief  Leave nothing loaded, so an FDA_MODE trigger refuses to start.
  *
- * What the host asks for when the console did not take the same preset.
+ * What the host asks for when the console did not take the same preset. The
+ * thermal limits the load armed stay armed.
  *
- * @return false, changing nothing, if a trigger is running.
+ * @return false, changing nothing, if a sequence is running or paused.
  */
 bool presets_unload(void);
+
+/**
+ * @brief  A standard image's host write is about to change the registers,
+ *         profiles or trigger (preset_policy_raw_write()) of this module (here) or of
+ *         another one it is forwarded to. Here, leave nothing loaded, since
+ *         the loaded preset no longer describes the chips; elsewhere, that
+ *         module unloads itself when it runs the write.
+ * @return false, changing nothing, if a loaded preset is running or paused
+ *         here: the write would change it mid-sequence and is refused. Only the master
+ *         runs the trigger, so a module never refuses (#57). With nothing
+ *         loaded, always true.
+ */
+bool presets_raw_write(bool here);
+
+/** Is a preset loaded on this module? */
+bool presets_loaded(void);
+
+// What this module has loaded (OW_PRESET_LOADED).
+typedef struct {
+	uint8_t index;
+	uint8_t duration_index;            // the run-length choice the load made
+	uint32_t train_count;              // and the pulse-train count it resolved to
+	uint32_t settings_crc;
+	uint32_t regs_crc;                 // this module's own
+} PresetLoaded;
+
+/** @return false, leaving *out alone, if nothing is loaded. */
+bool presets_loaded_info(PresetLoaded *out);
 
 // A reading older than this counts as no reading: a sensor that stops
 // answering must not leave a run going on its last value.
 #define PRESET_TEMP_MAX_AGE_MS 3000u
 
 /**
- * @brief  May the trigger start now?
+ * @brief  May the trigger start now, under the armed thermal limits and this
+ *         module's reading (thermal_limits_start_check())?
  * @return OW_SUCCESS, or why not (OW_NO_PRESET, OW_TEMP_UNKNOWN,
  *         OW_TEMP_TOO_HIGH), for the OW_ERROR reply's reserved byte.
  */
@@ -204,13 +268,17 @@ uint8_t presets_start_check(void);
 uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size);
 
 /**
- * @brief  Must a running sequence stop? True at or above the loaded preset's
- *         shutoff_C, or when the reading has gone stale. Polled by the main
- *         loop after each temperature reading.
+ * @brief  May a sequence go on running, or resume, under the armed shutoff_C
+ *         and this module's reading (thermal_limits_shutoff_check())?
+ *         Whether or not a preset is still loaded.
+ * @return OW_SUCCESS, or why not: OW_TEMP_UNKNOWN (the reading has gone
+ *         stale), OW_TEMP_TOO_HIGH (at or above shutoff_C). The main loop
+ *         stops a running sequence on either after each reading; a RESUME is
+ *         refused with it in the OW_ERROR reply's reserved byte.
  */
-bool presets_thermal_trip(void);
+uint8_t presets_shutoff_check(void);
 
-#ifdef PRESET_MODE
+#ifdef PRESET_STORE
 
 /** Slots that hold nothing: neither a preset nor the second half of one. */
 uint8_t presets_free_slots(void);
@@ -243,8 +311,6 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc);
  */
 uint8_t presets_delete(uint8_t slot);
 
-#endif /* PRESET_MODE */
-
-#endif /* PRESETS_ENABLED */
+#endif /* PRESET_STORE */
 
 #endif /* INC_PRESETS_H_ */

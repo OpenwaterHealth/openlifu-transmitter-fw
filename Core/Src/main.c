@@ -546,6 +546,7 @@ int main(void)
   HAL_GPIO_WritePin(TR7_EN_GPIO_Port, TR7_EN_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(TR8_EN_GPIO_Port, TR8_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(50);
+  trigger_register_interlock();
   MX_USB_DEVICE_Init();
 
   HAL_Delay(500);
@@ -649,6 +650,12 @@ int main(void)
     {
       if (get_device_role() == ROLE_MASTER)
       {
+        // The host is gone: stop before the next command, in the same context
+        // as START and RESUME, so neither can undo it.
+        if (trigger_take_host_lost())
+        {
+          (void)stop_sequence();
+        }
         comms_host_check_received(); // check comms
       }
       else
@@ -711,18 +718,19 @@ int main(void)
         }
       }
 
-#ifdef PRESETS_ENABLED
-      // The loaded preset's shutoff_C, or a thermistor gone quiet, ends a run.
-      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
+      // The armed shutoff_C, or a thermistor gone quiet, ends a run.
+      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_shutoff_check() != OW_SUCCESS)
       {
         (void)stop_sequence();
       }
-#endif
 
-      // A pause not resumed in time ends the sequence; resume is refused after.
-      if (trigger_pause_expired())
+      // The treatment timeout ends a running or paused sequence. The preset
+      // goes with it, so only a STOP and a fresh load can start another.
+      if (trigger_timeout_expired())
       {
         (void)stop_sequence();
+        (void)presets_unload();
+        trigger_end_timeout();
       }
     }
   }
