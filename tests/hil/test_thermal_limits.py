@@ -53,7 +53,10 @@ def _unload_all(txdevice):
 
 def _host_trigger(txdevice, **changes) -> None:
     """Set the host's own trigger config: a raw write, which unloads."""
-    trigger = {**txdevice.get_trigger_json(), **changes}
+    # Drop GET_SWTRIG's read-only fields: the firmware ignores them, and with
+    # them the payload sits one byte under SET_SWTRIG's 255-byte buffer (#63).
+    trigger = {k: v for k, v in {**txdevice.get_trigger_json(), **changes}.items()
+               if k not in ("TrainCount", "TriggerStatus")}
     r = send_raw(
         txdevice,
         OW_CONTROLLER,
@@ -61,6 +64,13 @@ def _host_trigger(txdevice, **changes) -> None:
         data=bytearray(json.dumps(trigger).encode("ascii")),
     )
     assert r is not None and r.packet_type != OW_ERROR
+
+
+def _train_interval(trigger) -> int:
+    """An interval that holds the whole train (34ele: 16 pulses at 10 Hz, 1.6 s); START refuses a shorter one."""
+    f, n = int(trigger.get("TriggerFrequencyHz", 0)), int(trigger.get("TriggerPulseCount", 0))
+    train_us = (1_000_000 // f) * n if f else 0
+    return max(int(trigger.get("TriggerPulseTrainInterval", 0)), train_us + 100_000, 500_000)
 
 
 def _wait_status(txdevice, status: str, wait_s: float) -> bool:
@@ -218,7 +228,7 @@ def test_limits_refused_while_paused(txdevice, host_mode):
     """A paused sequence resumes on the limits and timeout it started under."""
     trigger = txdevice.get_trigger_json()
     _host_trigger(txdevice, TriggerMode=TRIGGER_MODE_SEQUENCE, TriggerPulseTrainCount=1000,
-                  TriggerPulseTrainInterval=max(int(trigger.get("TriggerPulseTrainInterval", 0)), 500_000))
+                  TriggerPulseTrainInterval=_train_interval(trigger))
     start = _tenth_above(txdevice.get_temperature(), 20)
     assert set_thermal_limits(txdevice, start, start + 20.0, timeout_s=600).packet_type != OW_ERROR
     before = armed_limits(txdevice)
@@ -239,7 +249,7 @@ def test_resume_refused_at_shutoff_c_with_temp_too_high(txdevice, request, host_
     wait_s = request.config.getoption("--shutoff-wait")
     trigger = txdevice.get_trigger_json()
     _host_trigger(txdevice, TriggerMode=TRIGGER_MODE_SEQUENCE, TriggerPulseTrainCount=1000,
-                  TriggerPulseTrainInterval=max(int(trigger.get("TriggerPulseTrainInterval", 0)), 500_000))
+                  TriggerPulseTrainInterval=_train_interval(trigger))
     start = _tenth_above(txdevice.get_temperature(), 1)
     shutoff = round(start + 0.1, 1)
     assert set_thermal_limits(txdevice, start, shutoff, timeout_s=0).packet_type != OW_ERROR
