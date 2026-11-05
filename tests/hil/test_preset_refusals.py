@@ -7,15 +7,28 @@ Needs a +fda or +test image (FDA_MODE); skipped on a standard image
 import json
 
 import pytest
-from conftest import PRESET_INDEX, loaded
+from conftest import (
+    PRESET_INDEX,
+    armed_limits,
+    clear_thermal_limits,
+    loaded,
+    set_thermal_limits,
+)
 from openlifu_sdk.io.exceptions import LIFUDeviceError
 from openlifu_sdk.io.LIFUConfig import (
     OW_CONTROLLER,
     OW_CTRL_SET_SWTRIG,
     OW_ERROR,
+    OW_FDA_REFUSED,
     OW_INVALID_PACKET,
 )
-from openlifu_sdk.io.LIFUTXPresets import load_preset, regs_crc, train_count_selections
+from openlifu_sdk.io.LIFUTXPresets import (
+    load_preset,
+    regs_crc,
+    thermal_limits,
+    train_count_selections,
+    treatment_timeout,
+)
 
 
 def _set_swtrig(txdevice, trigger: dict):
@@ -40,6 +53,20 @@ def test_set_swtrig_is_refused_after_a_load(txdevice, machine_config, presets_on
     assert r.reserved == OW_INVALID_PACKET
     assert txdevice.get_trigger_json() == before
     assert loaded(txdevice)["loaded"], "a refused write must leave the load alone"
+
+
+def test_thermal_limits_are_the_presets_and_cannot_be_changed(
+    txdevice, machine_config, presets_only
+):
+    load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
+    armed = armed_limits(txdevice)
+    assert armed["source"] == "preset" and armed["preset_index"] == PRESET_INDEX
+    assert armed["x10"] == tuple(thermal_limits(machine_config))
+    assert armed["treatment_timeout_s"] == treatment_timeout(machine_config)
+
+    for r in (set_thermal_limits(txdevice, 10.0, 90.0, timeout_s=0), clear_thermal_limits(txdevice)):
+        assert r is not None and (r.packet_type, r.reserved) == (OW_ERROR, OW_FDA_REFUSED)
+    assert armed_limits(txdevice) == armed
 
 
 def test_set_swtrig_is_refused_with_nothing_loaded(txdevice, machine_config, presets_only):

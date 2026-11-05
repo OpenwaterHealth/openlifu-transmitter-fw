@@ -41,12 +41,15 @@
  *   settings_crc  over the preset .json the blob was generated from
  *   regs_crc      over the blob's body, everything the firmware executes from
  *
- * Once a preset is loaded the trigger will not start above its start_C (or
- * without a fresh reading), a running sequence stops at its shutoff_C, a
- * paused one will not resume at it, and either ends as TIMEOUT once its
- * treatment_timeout_s has passed since START.
- * With nothing loaded, an FDA_MODE image's trigger does not start; a standard
- * image's runs on the host's own configuration.
+ * A load also arms the preset's start_C, shutoff_C and treatment_timeout_s
+ * (thermal_limits.h): the trigger will not start above start_C (or without a
+ * fresh reading), a running sequence stops at shutoff_C, a paused one will
+ * not resume at it (OW_TEMP_TOO_HIGH, as START above start_C), and a running
+ * or paused one ends as TIMEOUT once treatment_timeout_s has passed since
+ * START. The limits outlast the load: a
+ * raw write, an unload or a timeout leaves them armed. With nothing loaded, an
+ * FDA_MODE image's trigger does not start; a standard image's runs on the
+ * host's own configuration, under whatever limits are armed.
  *
  * A stored upload is staged in RAM and written only once all of it has
  * arrived and checks out; its magic is programmed last, so a write cut short
@@ -93,7 +96,9 @@
  *     u8  train_count_len, u32 train_counts[train_count_len]
  *     i16 start_c_x10, i16 shutoff_c_x10
  *     u16 treatment_timeout_s  total time from START, pauses included, after
- *                            which the run ends as TIMEOUT (SR-024); >= 1
+ *                            which the run ends as TIMEOUT (SR-024); >= 1,
+ *                            so every preset has one (only the host's
+ *                            SET_THERMAL_LIMITS may arm none)
  *     per chip:
  *       the base registers, as runs of consecutive addresses:
  *         u16 run_count, then per run: u16 start_addr, u16 n, u32 value[n]
@@ -207,9 +212,10 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
                   uint32_t expected_settings_crc);
 
 /**
- * @brief  Leave nothing loaded, so the trigger refuses to start.
+ * @brief  Leave nothing loaded, so an FDA_MODE trigger refuses to start.
  *
- * What the host asks for when the console did not take the same preset.
+ * What the host asks for when the console did not take the same preset. The
+ * thermal limits the load armed stay armed.
  *
  * @return false, changing nothing, if a sequence is running or paused.
  */
@@ -248,7 +254,8 @@ bool presets_loaded_info(PresetLoaded *out);
 #define PRESET_TEMP_MAX_AGE_MS 3000u
 
 /**
- * @brief  May the trigger start now?
+ * @brief  May the trigger start now, under the armed thermal limits and this
+ *         module's reading (thermal_limits_start_check())?
  * @return OW_SUCCESS, or why not (OW_NO_PRESET, OW_TEMP_UNKNOWN,
  *         OW_TEMP_TOO_HIGH), for the OW_ERROR reply's reserved byte.
  */
@@ -261,11 +268,15 @@ uint8_t presets_start_check(void);
 uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size);
 
 /**
- * @brief  Must a running sequence stop? True at or above the loaded preset's
- *         shutoff_C, or when the reading has gone stale. Polled by the main
- *         loop after each temperature reading.
+ * @brief  May a sequence go on running, or resume, under the armed shutoff_C
+ *         and this module's reading (thermal_limits_shutoff_check())?
+ *         Whether or not a preset is still loaded.
+ * @return OW_SUCCESS, or why not: OW_TEMP_UNKNOWN (the reading has gone
+ *         stale), OW_TEMP_TOO_HIGH (at or above shutoff_C). The main loop
+ *         stops a running sequence on either after each reading; a RESUME is
+ *         refused with it in the OW_ERROR reply's reserved byte.
  */
-bool presets_thermal_trip(void);
+uint8_t presets_shutoff_check(void);
 
 #ifdef PRESET_STORE
 

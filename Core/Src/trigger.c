@@ -2,6 +2,7 @@
 #include "main.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "thermal_limits.h"
 #include "usb_events.h"
 
 #include "jsmn.h"
@@ -28,9 +29,9 @@ static volatile bool _resume_wait = false;   // HIRES is running out that gap
 static volatile uint32_t _gap_elapsed_us = 0;  // of the last train's period, at the pause
 static volatile uint32_t _paused_tick = 0;
 
-// Treatment timeout: START begins the clock, and pauses do not hold it.
+// Treatment timeout: START begins the clock, and pauses do not hold it. The
+// timeout itself is armed with the thermal limits (thermal_limits.h).
 static volatile uint32_t _run_start_tick = 0;
-static uint32_t _timeout_ms = 0;               // 0: none
 
 static volatile OW_TimerData _timerDataConfig = {
 		.TriggerFrequencyHz = 0,
@@ -827,17 +828,11 @@ bool resume_trigger_pulse(void)
 	return true;
 }
 
-void trigger_set_timeout_s(uint32_t timeout_s)
-{
-	_timeout_ms = timeout_s * 1000U;
-}
-
 bool trigger_timeout_expired(void)
 {
 	uint8_t status = _timerDataConfig.TriggerStatus;
-	return _timeout_ms != 0U &&
-	       (status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED) &&
-	       (HAL_GetTick() - _run_start_tick) >= _timeout_ms;
+	return (status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED) &&
+	       thermal_limits_timed_out(HAL_GetTick() - _run_start_tick);
 }
 
 void trigger_end_timeout(void)
