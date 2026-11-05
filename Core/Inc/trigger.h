@@ -68,6 +68,9 @@ uint32_t get_trigger_pulse_count(void);
 uint32_t get_trigger_period_us(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
+void trigger_register_interlock(void);
+// True once after the host link was lost (port closed, cable pulled).
+bool trigger_take_host_lost(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,

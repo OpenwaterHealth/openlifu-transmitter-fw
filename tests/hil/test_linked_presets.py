@@ -6,8 +6,8 @@ Give the set the image was built from:
     pytest tests/hil/test_linked_presets.py --context path/to/preset_settings/test
 
 Each index is the host's preset of that index, loads only with its own CRCs,
-and the image has no index past the set. Presets-only images only; a DEV
-image's slots are covered by test_preset_lock.py. Keep the console HV off:
+and the image has no index past the set. Presets-only images only; a
+standard image's slots are covered by test_preset_store.py. Keep the console HV off:
 nothing here starts the trigger.
 """
 

@@ -72,9 +72,8 @@ typedef enum {
 	OW_PRESET_NO_ROOM = 0xF3,    // blob needs the next slot too, and it is taken or missing
 	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
 	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
-	OW_FDA_REFUSED = 0xF8,       // the preset lock (always on in FDA mode) refuses this
-	                             //   (preset_policy.h)
-	// Preset modes: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
+	OW_FDA_REFUSED = 0xF8,       // a presets-only image refuses this (preset_policy.h)
+	// Presets: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
 	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
 	OW_TEMP_TOO_HIGH = 0xFA,  // above the loaded preset's start_C
 	OW_NO_PRESET = 0xFB,      // nothing loaded with OW_PRESET_LOAD yet
@@ -159,9 +158,10 @@ typedef enum {
 // GET and CAPACITY answer from the master's flash and are never forwarded.
 // LOAD is forwarded: each module programs its own TX7332 chips and checks the
 // CRC against its own copy. WRITE, COMMIT, DELETE and CAPACITY exist in a
-// bare-metal DEV image only (PRESET_STORE); the three that change the presets
-// are forwarded too, since each module keeps its own. LOCK is the master's
-// alone; LOADED asks every module (if_commands.c).
+// bare-metal standard image only (PRESET_STORE); the three that change the
+// presets are forwarded too, since each module keeps its own. LOADED asks
+// every module (if_commands.c). 0x56 was the runtime lock's command; do not
+// reuse it.
 typedef enum {
 	OW_PRESET_GET = 0x50,   // reserved=index -> count, index, chips, profiles,
 	                        //   settings_crc u32, regs_crc u32, id_len, id
@@ -176,9 +176,6 @@ typedef enum {
 	OW_PRESET_DELETE = 0x54,// reserved=slot; empties it
 	OW_PRESET_CAPACITY = 0x55, // -> slots, free slots, slot size u16,
 	                        //   largest blob u16 (both LE)
-	OW_PRESET_LOCK = 0x56,  // reserved=1 turns the preset lock on until reset,
-	                        //   reserved=0 reads it -> u8 1 if locked (always,
-	                        //   in FDA_MODE)
 	OW_PRESET_LOADED = 0x57,// -> 16 bytes: what every module has loaded, or
 	                        //   nothing (if_commands.c, preset_loaded_reply)
 } UstxPresetCommands;

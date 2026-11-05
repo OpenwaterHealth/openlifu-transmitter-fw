@@ -155,7 +155,7 @@
 #endif
 #define APPLICATION_USER_CONFIG    			((uint32_t)0x0803F800) // 2 KB user config region (page 127, end of flash), application use only -- not writable via DFU
 
-// Presets, pages 110-125 (DEV, see presets.h). Outside the application slot:
+// Presets, pages 110-125 (standard image, see presets.h). Outside the application slot:
 // the bootloader erases an image whose slot holds anything past the image, and
 // DFU must not reach the presets either. The bootloader's own memory_map.h has
 // to agree; until it does (open-lifu-transmitter-bl 1.0.1 still checks pages

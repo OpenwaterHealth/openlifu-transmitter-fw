@@ -2,6 +2,7 @@
 #include "main.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "usb_events.h"
 
 #include "jsmn.h"
 
@@ -610,6 +611,29 @@ uint8_t stop_trigger_pulse(void) {
     trigger_pin_park_low();
     _timerDataConfig.TriggerStatus = TRIGGER_STATUS_READY;
     return TRIGGER_STATUS_READY;
+}
+
+// Set in the USB interrupt, acted on by the main loop: a stop from the
+// interrupt could land inside START or RESUME and be overwritten (SR-015).
+static volatile bool _host_lost = false;
+
+static void trigger_usb_event_cb(usb_event_t event)
+{
+    (void)event;
+    _host_lost = true;
+}
+
+bool trigger_take_host_lost(void)
+{
+    if (!_host_lost) return false;
+    _host_lost = false;
+    return true;
+}
+
+void trigger_register_interlock(void)
+{
+    usb_register_callback(USB_EVENT_PORT_CLOSE, trigger_usb_event_cb);
+    usb_register_callback(USB_EVENT_DISCONNECT, trigger_usb_event_cb);
 }
 
 static void finish_sequence(void)

@@ -546,6 +546,7 @@ int main(void)
   HAL_GPIO_WritePin(TR7_EN_GPIO_Port, TR7_EN_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(TR8_EN_GPIO_Port, TR8_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(50);
+  trigger_register_interlock();
   MX_USB_DEVICE_Init();
 
   HAL_Delay(500);
@@ -649,6 +650,12 @@ int main(void)
     {
       if (get_device_role() == ROLE_MASTER)
       {
+        // The host is gone: stop before the next command, in the same context
+        // as START and RESUME, so neither can undo it.
+        if (trigger_take_host_lost())
+        {
+          (void)stop_sequence();
+        }
         comms_host_check_received(); // check comms
       }
       else

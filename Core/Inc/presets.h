@@ -6,7 +6,9 @@
  *
  *   FDA_MODE  the presets-only image: the presets it runs are linked into
  *             it, and nothing in the image writes them, or the user config.
- *             Always locked (below). Either
+ *             The host may load a preset and change nothing else: not the
+ *             registers, the trigger, the user config or the firmware
+ *             (preset_policy.h). Either
  *               one preset, at the end of the application slot (pages
  *               124-125, the FDA linker scripts' FDA_PRESET region), from
  *               Core/Inc/presets/fda_preset.h; or
@@ -15,20 +17,25 @@
  *               SDK's generate_preset_set) and the headers it includes.
  *             CMake picks whichever header the tree has. Flashing or updating
  *             the image writes them.
- *   DEV       every other build: presets in pages 110-125, above the
+ *   standard  every other build: presets in pages 110-125, above the
  *             application slot: 16 slots of one page, slot N being preset
  *             index N. A blob longer than a page runs on into the next slot,
- *             which then has no preset of its own. The host may also write
- *             the registers and trigger itself, as a research build does.
+ *             which then has no preset of its own. The host also keeps the
+ *             registers and the trigger: a raw register, profile or trigger
+ *             write leaves nothing loaded on the module that runs it, and is
+ *             refused (OW_PRESET_BUSY) while a loaded preset runs.
  *
- * The lock (OW_PRESET_LOCK) puts a DEV image in the FDA image's place: the
- * host may load presets but not change them, the registers, the trigger, the
- * user config or the firmware (preset_policy.h). Only a reset unlocks it.
- * Unlocked, a raw register, profile or trigger write leaves nothing loaded.
+ * Each module keeps its own load: a raw write to one module's chips unloads
+ * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
+ * every module on the same preset is the host's job; configuring modules
+ * differently is a research use of the low-level commands. A raw write the
+ * handler then rejects has still unloaded: a preset counts as loaded only on
+ * the happy path.
  *
- * Only a bare-metal DEV image stores presets (PRESET_STORE). Under the
+ * Only a bare-metal standard image stores presets (PRESET_STORE). Under the
  * bootloader, pages 110-125 are the end of its slot, which it checks are
- * erased at every boot, so a stored preset would stop the image booting.
+ * erased at every boot, so a stored preset would stop the image booting; a
+ * signed standard image therefore finds every slot empty.
  *
  * A module programs only its own chips, so a preset spanning modules is one
  * blob per module, in that module's own flash, with its own regs_crc.
@@ -40,7 +47,8 @@
  *
  * Once a preset is loaded the trigger will not start above its start_C (or
  * without a fresh reading), and a running sequence stops at its shutoff_C.
- * With nothing loaded the trigger does not start.
+ * With nothing loaded, an FDA_MODE image's trigger does not start; a standard
+ * image's runs on the host's own configuration.
  *
  * A stored upload is staged in RAM and written only once all of it has
  * arrived and checks out; its magic is programmed last, so a write cut short
@@ -98,7 +106,7 @@
 #define PRESET_SLOT_SIZE   2048u                       // one flash page
 #define PRESET_BLOB_MAX    (2u * PRESET_SLOT_SIZE)     // a blob may take two slots
 
-// Preset indexes: DEV has every slot; FDA mode runs the presets linked in,
+// Preset indexes: a standard image has every slot; FDA mode runs the presets linked in,
 // one from fda_preset.h, or as many as the generated preset_table.h defines.
 #ifndef FDA_MODE
 #define PRESET_COUNT PRESET_SLOTS
@@ -212,14 +220,15 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 bool presets_unload(void);
 
 /**
- * @brief  An unlocked host write is about to change the registers, profiles
- *         or trigger (preset_policy_raw_write()) of this module (here) or of
+ * @brief  A standard image's host write is about to change the registers,
+ *         profiles or trigger (preset_policy_raw_write()) of this module (here) or of
  *         another one it is forwarded to. Here, leave nothing loaded, since
  *         the loaded preset no longer describes the chips; elsewhere, that
  *         module unloads itself when it runs the write.
- * @return false, changing nothing, if a loaded preset is running: the write,
- *         wherever it goes, would change it mid-burst and is refused. With
- *         nothing loaded, always true.
+ * @return false, changing nothing, if a loaded preset is running here: the
+ *         write would change it mid-burst and is refused. Only the master
+ *         runs the trigger, so a module never refuses (#57). With nothing
+ *         loaded, always true.
  */
 bool presets_raw_write(bool here);
 
@@ -237,16 +246,6 @@ typedef struct {
 
 /** @return false, leaving *out alone, if nothing is loaded. */
 bool presets_loaded_info(PresetLoaded *out);
-
-#ifdef FDA_MODE
-static inline bool presets_locked(void) { return true; }
-static inline void presets_lock(void) { }
-#else
-/** Is the lock on? Always, in FDA_MODE. */
-bool presets_locked(void);
-/** Turn the lock on, until the next reset. */
-void presets_lock(void);
-#endif
 
 // A reading older than this counts as no reading: a sensor that stops
 // answering must not leave a run going on its last value.

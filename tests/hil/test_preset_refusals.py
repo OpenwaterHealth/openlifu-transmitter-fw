@@ -1,7 +1,7 @@
-"""A locked device refuses host writes that would change what a loaded preset runs.
+"""A presets-only image refuses host writes that would change what a loaded preset runs.
 
-Runs on an FDA image (always locked) or a DEV image, which the `locked` fixture
-locks (conftest.py). Keep the console HV off: nothing here turns HV on.
+Needs a +fda or +test image (FDA_MODE); skipped on a standard image
+(conftest.py). Keep the console HV off: nothing here turns HV on.
 """
 
 import json
@@ -26,7 +26,7 @@ def _set_swtrig(txdevice, trigger: dict):
     )
 
 
-def test_set_swtrig_is_refused_after_a_load(txdevice, machine_config, locked):
+def test_set_swtrig_is_refused_after_a_load(txdevice, machine_config, presets_only):
     load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
     before = txdevice.get_trigger_json()
 
@@ -42,7 +42,7 @@ def test_set_swtrig_is_refused_after_a_load(txdevice, machine_config, locked):
     assert loaded(txdevice)["loaded"], "a refused write must leave the load alone"
 
 
-def test_set_swtrig_is_refused_with_nothing_loaded(txdevice, machine_config, locked):
+def test_set_swtrig_is_refused_with_nothing_loaded(txdevice, machine_config, presets_only):
     for module in range(txdevice.get_module_count()):
         txdevice.unload_preset(module)
     before = txdevice.get_trigger_json()
@@ -55,7 +55,7 @@ def test_set_swtrig_is_refused_with_nothing_loaded(txdevice, machine_config, loc
 
 @pytest.mark.parametrize("duration_index", range(8))
 def test_each_run_length_is_selected_through_the_load(
-    txdevice, machine_config, locked, duration_index
+    txdevice, machine_config, presets_only, duration_index
 ):
     counts = train_count_selections(machine_config)
     if duration_index >= len(counts):
@@ -72,7 +72,7 @@ def test_each_run_length_is_selected_through_the_load(
     assert state["regs_crc"] == regs_crc(machine_config, 0)
 
 
-def test_a_run_length_the_preset_does_not_offer_is_refused(txdevice, machine_config, locked):
+def test_a_run_length_the_preset_does_not_offer_is_refused(txdevice, machine_config, presets_only):
     counts = train_count_selections(machine_config)
     # The right CRCs, so the duration index is the only thing wrong.
     with pytest.raises(LIFUDeviceError):

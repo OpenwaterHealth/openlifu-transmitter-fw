@@ -132,19 +132,18 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # ---------------------------
 # Two builds (Core/Inc/presets.h):
 #
-# FDA_MODE is the presets-only image: it links its presets in and is always
-# preset-locked, so the host loads a preset and can change nothing else. The
-# openlifu SDK generates the presets into Core/Inc/presets/, and the tree
-# holds one of:
+# FDA_MODE is the presets-only image: it links its presets in, and the host
+# loads a preset and can change nothing else (preset_policy.c). The openlifu
+# SDK generates the presets into Core/Inc/presets/, and the tree holds one of:
 #   fda_preset.h    one preset, at the end of the bootloader's slot (pages
 #                   124-125); generate_fda_preset
 #   preset_table.h  a set of presets, as const data in the image
 #                   (PRESET_TABLE); generate_preset_set
 #
-# Every other build is DEV: full host control, presets in pages 110-125, and
-# a runtime lock (OW_PRESET_LOCK) that refuses what FDA_MODE refuses until the
-# next reset. Only a bare-metal DEV image can store presets, since the
-# bootloader's slot still covers pages 110-125.
+# Every other build is a standard image: the host owns the TX7332 registers
+# and the trigger, and may also load presets from pages 110-125. Only a
+# bare-metal standard image can store presets there, since the bootloader's
+# slot still covers pages 110-125.
 option(FDA_MODE "One read-only preset, linked in at the end of the application slot" OFF)
 
 # A presets-only (FDA_MODE) image reports which preset set it carries:
@@ -169,10 +168,10 @@ if(FDA_MODE)
                                 "not ${PRESET_TABLE_HEADER}.")
         endif()
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESET_TABLE)
-        message(STATUS "FDA mode    : ON (preset set from preset_table.h, always locked)")
+        message(STATUS "FDA mode    : ON (preset set from preset_table.h, host writes refused)")
     elseif(EXISTS "${FDA_PRESET_HEADER}")
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
-        message(STATUS "FDA mode    : ON (preset at pages 124-125, always locked)")
+        message(STATUS "FDA mode    : ON (preset at pages 124-125, host writes refused)")
     else()
         message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER} or ${PRESET_TABLE_HEADER}: generate "
                             "them with the openlifu SDK (generate_fda_preset / generate_preset_set).")
@@ -180,7 +179,7 @@ if(FDA_MODE)
     set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 else()
     set(FW_BUILD_VARIANT "")
-    message(STATUS "FDA mode    : OFF (DEV: host control, preset slots, runtime lock)")
+    message(STATUS "FDA mode    : OFF (standard: host control, preset slots at pages 110-125)")
 endif()
 
 # OW_CMD_VERSION returns FW_VERSION. A presets-only image appends

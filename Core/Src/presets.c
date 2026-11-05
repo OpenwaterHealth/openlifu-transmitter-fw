@@ -17,19 +17,15 @@
 
 extern TX7332 transmitters[TX_PER_MODULE];
 
-// Thermal limits of the preset the chips were last programmed from; they
-// govern every start until another load replaces them. Kept by value so they
-// never depend on the blob staying where it was.
+// Thermal limits of the loaded preset; they govern START and a running
+// sequence while it stays loaded (presets_start_check(), presets_thermal_trip()).
+// Kept by value so they never depend on the blob staying where it was.
 static bool preset_loaded = false;
 static int16_t loaded_start_c_x10 = 0;
 static int16_t loaded_shutoff_c_x10 = 0;
 // Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it,
 // and storing over its slot unloads it.
 static PresetLoaded loaded;
-
-#ifndef FDA_MODE
-static bool locked = false;
-#endif
 
 // Blob fields are little-endian and unaligned, so they are read a byte at a time.
 static uint16_t rd_u16(const uint8_t *p)
@@ -502,9 +498,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		return false;
 	}
 
-	// The preset owns its sequence timing and its run-length choices: the
-	// lock refuses SET_SWTRIG, and unlocked it unloads the preset (it would
-	// also clear the profile cycle installed above).
+	// The preset owns its sequence timing and its run-length choices: an
+	// FDA_MODE image refuses SET_SWTRIG, and a standard one unloads the
+	// preset on it (it would also clear the profile cycle installed above).
 	uint32_t trains = presets_train_count(&preset, (uint8_t)duration_index);
 	if (!trigger_set_config(preset.trig_frequency_hz,
 	                        PRESET_TRIGGER_PULSE_WIDTH_US,
@@ -551,18 +547,6 @@ bool presets_loaded_info(PresetLoaded *out)
 	*out = loaded;
 	return true;
 }
-
-#ifndef FDA_MODE
-bool presets_locked(void)
-{
-	return locked;
-}
-
-void presets_lock(void)
-{
-	locked = true;
-}
-#endif
 
 static bool temperature_fresh(void)
 {

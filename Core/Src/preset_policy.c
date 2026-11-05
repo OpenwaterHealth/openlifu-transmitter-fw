@@ -33,7 +33,7 @@ bool preset_policy_raw_write(uint8_t packet_type, uint8_t command)
 	}
 }
 
-uint8_t preset_policy_locked_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved)
+uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved)
 {
 	if (preset_policy_raw_write(packet_type, command)) return OW_INVALID_PACKET;
 
@@ -50,13 +50,6 @@ uint8_t preset_policy_locked_refusal(uint8_t packet_type, uint8_t command, uint8
 			return (reserved == 1U) ? OW_FDA_REFUSED : OW_SUCCESS;
 		case OW_CMD_DFU:
 			return OW_FDA_REFUSED;
-#ifndef FDA_MODE
-		// The FDA image has no stored presets to change.
-		case OW_PRESET_WRITE:
-		case OW_PRESET_COMMIT:
-		case OW_PRESET_DELETE:
-			return OW_FDA_REFUSED;
-#endif
 		default:
 			return OW_SUCCESS;
 		}

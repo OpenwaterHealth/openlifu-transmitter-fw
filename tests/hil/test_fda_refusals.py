@@ -1,9 +1,8 @@
 """A presets-only image refuses DFU entry and raw I2C to the module bootloaders (SR-021).
 
-Bench steps 4.06 (+fda) and 4.08b (+test). Presets-only images only: on a DEV
-image these commands would run, and DFU would drop the board into its
-bootloader, so every test here skips there.
-The locked-DEV equivalents are in test_preset_lock.py. Keep the console HV off.
+Bench steps 4.06 (+fda) and 4.08b (+test). Presets-only images only: on a
+standard image these commands would run, and DFU would drop the board into its
+bootloader, so every test here skips there. Keep the console HV off.
 
 The last test resets the transmitter and reconnects.
 """
@@ -34,9 +33,9 @@ RECONNECT_TIMEOUT_S = 20.0
 
 
 @pytest.fixture(autouse=True)
-def presets_only(variant):
+def fda_only(variant):
     if variant not in PRESETS_ONLY:
-        pytest.skip("presets-only (+fda / +test) images only: a DEV image would run these")
+        pytest.skip("presets-only (+fda / +test) images only: a standard image would run these")
 
 
 def _assert_refused_and_still_running(txdevice, variant, r):

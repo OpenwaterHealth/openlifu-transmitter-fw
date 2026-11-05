@@ -9,10 +9,8 @@ image was built with -- one preset file, or a whole preset context:
 Skipped unless one is given and a transmitter answers on USB.
 
 A presets-only (FDA_MODE) image reports its preset set as a version suffix,
-+fda or +test; any other build has no suffix and is a DEV image.
-
-On a DEV image the tests store the preset in slot 0 (bare-metal images only)
-and lock the device part-way through; only a reset unlocks it again.
++fda or +test, and holds preset 0 built in. A standard image has no suffix;
+on it the tests store the preset in slot 0, which needs a bare-metal image.
 """
 
 import json
@@ -24,13 +22,13 @@ from openlifu_sdk.io.LIFUConfig import OW_CONTROLLER, OW_ERROR
 from openlifu_sdk.io.LIFUTXDevice import LIFUTxDevice
 from openlifu_sdk.io.LIFUTXPresets import (
     compile_preset,
+    delete_preset,
     preset_id,
     store_preset,
     verify_preset,
 )
 
 # Not in the SDK yet (Core/Inc/common.h).
-OW_PRESET_LOCK = 0x56
 OW_PRESET_LOADED = 0x57
 
 PRESET_INDEX = 0
@@ -116,12 +114,6 @@ def send_raw(txdevice, packet_type, command, addr=0, reserved=0, data=None):
     )
 
 
-def lock_state(txdevice) -> int:
-    r = send_raw(txdevice, OW_CONTROLLER, OW_PRESET_LOCK)
-    assert r is not None and r.packet_type != OW_ERROR and r.data_len == 1
-    return r.data[0]
-
-
 def loaded(txdevice) -> dict:
     """OW_PRESET_LOADED, decoded."""
     r = send_raw(txdevice, OW_CONTROLLER, OW_PRESET_LOADED)
@@ -141,31 +133,48 @@ def loaded(txdevice) -> dict:
 
 @pytest.fixture(scope="session")
 def variant(txdevice) -> str:
-    """The preset set of a presets-only image ("fda" or "test"), else "dev"."""
+    """The preset set of a presets-only image ("fda" or "test"), else "standard"."""
     version = txdevice.get_version()
     _, plus, suffix = version.partition("+")
     if not plus:
-        return "dev"
+        return "standard"
     if suffix in PRESETS_ONLY:
         return suffix
     pytest.skip(f"image reports an unknown build variant ({version})")
 
 
 @pytest.fixture(scope="session")
-def preset_in_slot(txdevice, machine_config, variant):
-    """Preset 0 on the device is this preset: linked in (presets-only), or stored (DEV)."""
-    if variant == "dev":
-        try:
-            verify_preset(txdevice, PRESET_INDEX, machine_config)
-        except Exception:
-            if txdevice.get_preset_capacity() is None:
-                pytest.skip("DEV image under the bootloader cannot store presets")
-            store_preset(txdevice, PRESET_INDEX, machine_config)
+def presets_only(txdevice, machine_config, variant):
+    """A presets-only image whose preset 0 is this preset."""
+    if variant == "standard":
+        pytest.skip("presets-only images only: a standard image refuses none of this")
     verify_preset(txdevice, PRESET_INDEX, machine_config)
 
 
-@pytest.fixture
-def locked(txdevice, preset_in_slot):
-    """The device as a presets-only image behaves: locked (DEV) or always locked."""
-    send_raw(txdevice, OW_CONTROLLER, OW_PRESET_LOCK, reserved=1)
-    assert lock_state(txdevice) == 1
+@pytest.fixture(scope="session")
+def standard(variant):
+    """A standard image: host control and preset slots."""
+    if variant != "standard":
+        pytest.skip("standard images only")
+
+
+@pytest.fixture(scope="session")
+def preset_in_slot(txdevice, machine_config, standard):
+    """A standard image whose slot 0 holds this preset, stored if need be.
+
+    A preset this fixture stored is deleted again at the end of the session:
+    pages 110-125 left written stop a signed image booting under bootloader
+    1.0.1 (#56).
+    """
+    stored = False
+    try:
+        verify_preset(txdevice, PRESET_INDEX, machine_config)
+    except Exception:
+        if txdevice.get_preset_capacity() is None:
+            pytest.skip("a standard image under the bootloader cannot store presets")
+        store_preset(txdevice, PRESET_INDEX, machine_config)
+        stored = True
+    verify_preset(txdevice, PRESET_INDEX, machine_config)
+    yield
+    if stored:
+        delete_preset(txdevice, PRESET_INDEX)

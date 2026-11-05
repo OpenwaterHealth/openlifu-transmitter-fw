@@ -23,17 +23,22 @@ Without either, the preset tests skip; without a transmitter on USB, every test
 skips. `--rootdir .` keeps pytest from taking the rootdir from the preset path.
 
 A presets-only (`Release-FDA*`) image reports its set as a version suffix,
-`+fda` or `+test`. A DEV image reports no suffix.
+`+fda` or `+test`. A standard image reports no suffix.
 
 Keep the console HV off. These tests load presets and send trigger commands,
 and none of them needs acoustic output.
 
+`test_preset_store.py` deletes every preset it stored, but a run cut short can
+leave pages 110-125 written. Erase them (or mass-erase) before flashing the
+bootloader and a signed image on that board: bootloader 1.0.1 will not boot
+an image whose slot holds anything there (#56).
+
 | File | Image | Bench step | Checks |
 |---|---|---|---|
-| `test_fda_refusals.py` | presets-only, `+fda` or `+test` (skips on DEV) | 4.06, 4.08b | `DFU` refused as `CMD` and `CONTROLLER` at the master and module 1, and as `ONE_WIRE`, each with `reserved` 0 and 0x77; `I2C_PASSTHRU` to the module bootloader (0x72) refused; the board still answers with the same suffix after each; `RESET` still works. Needs no `--preset`. |
-| `test_linked_presets.py` | presets-only, `+fda` or `+test` (skips on DEV) | 4.04, 4.04b, 4.08b | the image links exactly the set given (`OW_PRESET_GET` count); each index is the host's preset of that index and loads; each index refuses a wrong `settings_crc` and every other index's CRCs; no index past the set (count, count + 1, 255). With `--context`, the suffix names the context. |
-| `test_preset_lock.py` | presets-only, or DEV (bare-metal, to store the preset) | 4.00a, 4.00b | DEV unlocked: raw writes go through and unload; the lock turns on and stays on; locked refuses what a presets-only image refuses; reads stay open; Start needs a preset |
-| `test_preset_refusals.py` | presets-only, or a locked DEV image | 4.00a, 4.00b | `SET_SWTRIG` refused with or without a loaded preset; each run length of preset 0 selected through `OW_PRESET_LOAD`; an out-of-range run length refused |
+| `test_fda_refusals.py` | presets-only, `+fda` or `+test`; skips on a standard image | 4.06, 4.08b | `DFU` refused as `CMD` and `CONTROLLER` at the master and module 1, and as `ONE_WIRE`, each with `reserved` 0 and 0x77; `I2C_PASSTHRU` to the module bootloader (0x72) refused; the board still answers with the same suffix after each; `RESET` still works. Needs no `--preset`. |
+| `test_linked_presets.py` | presets-only, `+fda` or `+test`; skips on a standard image | 4.04, 4.04b, 4.08b | the image links exactly the set given (`OW_PRESET_GET` count); each index is the host's preset of that index and loads; each index refuses a wrong `settings_crc` and every other index's CRCs; no index past the set (count, count + 1, 255). With `--context`, the suffix names the context. |
+| `test_preset_store.py` | bare-metal standard image (`Release-BareMetal`); skips on +fda / +test, and under the bootloader | 4.00b | stores, loads and deletes a preset in a slot; a raw register or trigger write unloads it, or is refused with `OW_PRESET_BUSY` while it runs; with nothing loaded the host's own trigger config starts; `OW_PRESET_LOADED` across modules; `OW_PRESET_LOCK` (0x56) is gone |
+| `test_preset_refusals.py` | presets-only, `+fda` or `+test`; skips on a standard image | 4.00a | `SET_SWTRIG` refused with or without a loaded preset; each run length of preset 0 selected through `OW_PRESET_LOAD`; an out-of-range run length refused |
 
 Bench step 4.06 alone:
 
