@@ -3,6 +3,7 @@
 #include "common.h"
 #include "if_commands.h"
 #include "module_manager.h"
+#include "thermal_limits.h"
 #include "thermistor.h"
 #include "trigger.h"
 #include "tx7332.h"
@@ -17,15 +18,20 @@
 
 extern TX7332 transmitters[TX_PER_MODULE];
 
-// Thermal limits of the loaded preset; they govern START and a running
-// sequence while it stays loaded (presets_start_check(), presets_thermal_trip()).
-// Kept by value so they never depend on the blob staying where it was.
+// A load also arms the preset's thermal limits (thermal_limits.h), which
+// outlast it: unloading leaves them armed.
 static bool preset_loaded = false;
-static int16_t loaded_start_c_x10 = 0;
-static int16_t loaded_shutoff_c_x10 = 0;
 // Which preset, run length and CRCs that was: OW_PRESET_LOADED reports it,
 // and storing over its slot unloads it.
 static PresetLoaded loaded;
+
+// A sequence is under way, running or paused to resume on what it was loaded
+// with: the presets, and the registers they set, cannot change now.
+static bool sequence_under_way(void)
+{
+	uint8_t status = get_trigger_status();
+	return status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED;
+}
 
 // Blob fields are little-endian and unaligned, so they are read a byte at a time.
 static uint16_t rd_u16(const uint8_t *p)
@@ -112,9 +118,11 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	if (out->train_count_len < 1U) return false;
 	if (!take(&c, 4U * (uint32_t)out->train_count_len, &out->train_counts)) return false;
 
-	if (!take(&c, 4U, &f)) return false;
+	if (!take(&c, 6U, &f)) return false;
 	out->start_c_x10 = (int16_t)rd_u16(&f[0]);
 	out->shutoff_c_x10 = (int16_t)rd_u16(&f[2]);
+	out->treatment_timeout_s = rd_u16(&f[4]);
+	if (out->treatment_timeout_s < 1U) return false;
 
 	out->chips = c.p;
 	for (uint8_t chip = 0; chip < out->chip_count; chip++) {
@@ -196,8 +204,8 @@ _Static_assert(PRESET_MODULES == 1u,
 
 #else /* FDA_MODE, one preset */
 
-// The one preset, from the SDK. The linker puts it at the start of the
-// FDA_PRESET region; it is read from there, so what runs is what was flashed.
+// The one preset, from the SDK. The linker puts it right after the code
+// (.fda_preset); it is read from there, so what runs is what was flashed.
 #include "presets/fda_preset.h"
 extern const uint8_t _sfda_preset[];
 
@@ -295,8 +303,9 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
 	uint8_t next = (uint8_t)(slot + 1U);
 	if (new_slots > old_slots && (next >= PRESET_SLOTS || header_len(next) != 0U)) return OW_PRESET_NO_ROOM;
 
-	// A flash erase stalls the core for milliseconds, trigger ISRs included.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	// A flash erase stalls the core for milliseconds, trigger ISRs included,
+	// and storing over the loaded slot would unload a paused sequence.
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	// Erase whatever the old blob held as well, so a shorter one frees its second slot.
 	uint8_t span = (new_slots > old_slots) ? new_slots : old_slots;
@@ -320,7 +329,7 @@ uint8_t presets_delete(uint8_t slot)
 	uint32_t len = slot_len(slot, &tail);
 	if (tail) return OW_PRESET_SLOT_TAIL;
 	if (len == 0U) return OW_SUCCESS;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	uint32_t base = slot_address(slot);
 	slots_changing(slot, slots_for(len));
@@ -438,8 +447,8 @@ static bool find_apodization(const uint8_t *p, uint32_t *value)
 bool presets_unload(void)
 {
 	// What a running sequence was loaded with stays: the thermal shutoff is
-	// watching its limits.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	// watching its limits. A paused one resumes on them.
+	if (sequence_under_way()) return false;
 	preset_loaded = false;
 	return true;
 }
@@ -450,7 +459,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	// Rewriting the delay and pattern registers underneath a running sequence
 	// would change the output mid-burst. Otherwise any refusal, or a load that
 	// fails part way, leaves nothing loaded, so the trigger cannot start on an
-	// earlier load the host no longer matches.
+	// earlier load the host no longer matches. A timed-out sequence is ended
+	// with STOP first, as the SDK does, so the load cannot hide the TIMEOUT.
+	if (get_trigger_status() == TRIGGER_STATUS_TIMEOUT) return false;
 	if (!presets_unload()) return false;
 
 	Preset preset;
@@ -516,8 +527,8 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		TX7332_SetActiveDelayProfile(preset.profile_index, &transmitters[c], c);
 	}
 
-	loaded_start_c_x10 = preset.start_c_x10;
-	loaded_shutoff_c_x10 = preset.shutoff_c_x10;
+	thermal_limits_arm_preset(index, preset.start_c_x10, preset.shutoff_c_x10,
+	                          preset.treatment_timeout_s);
 	loaded.index = index;
 	loaded.duration_index = (uint8_t)duration_index;
 	loaded.train_count = trains;
@@ -531,7 +542,7 @@ bool presets_raw_write(bool here)
 {
 	// A raw write while nothing is loaded is the research case: let it be.
 	if (!preset_loaded) return true;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	if (sequence_under_way()) return false;
 	if (here) preset_loaded = false;
 	return true;
 }
@@ -556,18 +567,12 @@ static bool temperature_fresh(void)
 
 uint8_t presets_start_check(void)
 {
-	if (!preset_loaded) return OW_NO_PRESET;
-	if (!temperature_fresh()) return OW_TEMP_UNKNOWN;
-	if (tx_temperature * 10.0f > (float)loaded_start_c_x10) return OW_TEMP_TOO_HIGH;
-	return OW_SUCCESS;
+	return thermal_limits_start_check(preset_loaded, temperature_fresh(), tx_temperature);
 }
 
-bool presets_thermal_trip(void)
+uint8_t presets_shutoff_check(void)
 {
-	// Nothing loaded means nothing could have started.
-	if (!preset_loaded) return false;
-	if (!temperature_fresh()) return true;
-	return tx_temperature * 10.0f >= (float)loaded_shutoff_c_x10;
+	return thermal_limits_shutoff_check(temperature_fresh(), tx_temperature);
 }
 
 // value / 10^decimals as "-1.5" (decimals 1) or "-1.52" (decimals 2): the
@@ -597,8 +602,10 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	case OW_TEMP_TOO_HIGH: {
 		// Hundredths for the reading, so 35.04 does not print as "35.0 above 35.0".
 		float t = tx_temperature * 100.0f;
+		ThermalLimits armed;
+		thermal_limits_get(&armed);
 		(void)format_fixed(now, sizeof(now), (int32_t)(t + ((t >= 0.0f) ? 0.5f : -0.5f)), 2U);
-		(void)format_fixed(limit, sizeof(limit), preset_loaded ? loaded_start_c_x10 : 0, 1U);
+		(void)format_fixed(limit, sizeof(limit), armed.start_c_x10, 1U);
 		len = snprintf(buf, size, "TX %s C above start_C %s C", now, limit);
 		break;
 	}

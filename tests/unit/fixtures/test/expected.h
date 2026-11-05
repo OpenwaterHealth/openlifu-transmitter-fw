@@ -14,10 +14,10 @@ static const struct {
 	uint8_t train_count_len;
 	uint32_t train_counts[16];
 } expected[EXPECTED_COUNT] = {
-	{ "diathermy_34ele_40V_50pct_25mm", 0x41a12748u, 0xf632a257u, 5u, { 19u, 37u, 75u, 187u, 375u } },
-	{ "diathermy_34ele_40V_50pct_25mm_extended", 0x4c310656u, 0x1d880ddeu, 4u, { 375u, 750u, 1125u, 2250u } },
-	{ "diathermy_34ele_40V_50pct_25mm_short", 0xa95bcfc3u, 0x31cb0bceu, 5u, { 94u, 188u, 375u, 938u, 1875u } },
-	{ "diathermy_34ele_40V_50pct_25mm_lowv", 0x04dcfb3fu, 0xf632a257u, 5u, { 19u, 37u, 75u, 187u, 375u } },
+	{ "diathermy_34ele_40V_50pct_25mm", 0x61c6716fu, 0xe4c41cf3u, 5u, { 19u, 37u, 75u, 187u, 375u } },
+	{ "diathermy_34ele_40V_50pct_25mm_extended", 0xd2009d6du, 0x48ec6a32u, 4u, { 375u, 750u, 1125u, 2250u } },
+	{ "diathermy_34ele_40V_50pct_25mm_short", 0x4daff6dbu, 0x61268a55u, 5u, { 94u, 188u, 375u, 938u, 1875u } },
+	{ "diathermy_34ele_40V_50pct_25mm_lowv", 0xe01f32dfu, 0xe4c41cf3u, 5u, { 19u, 37u, 75u, 187u, 375u } },
 };
 
 #endif  // FIXTURE_EXPECTED_H_

@@ -718,10 +718,19 @@ int main(void)
         }
       }
 
-      // The loaded preset's shutoff_C, or a thermistor gone quiet, ends a run.
-      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
+      // The armed shutoff_C, or a thermistor gone quiet, ends a run.
+      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_shutoff_check() != OW_SUCCESS)
       {
         (void)stop_sequence();
+      }
+
+      // The treatment timeout ends a running or paused sequence. The preset
+      // goes with it, so only a STOP and a fresh load can start another.
+      if (trigger_timeout_expired())
+      {
+        (void)stop_sequence();
+        (void)presets_unload();
+        trigger_end_timeout();
       }
     }
   }

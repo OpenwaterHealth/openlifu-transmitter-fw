@@ -29,7 +29,8 @@ bool preset_policy_raw_write(uint8_t packet_type, uint8_t command);
  * @brief  Does a presets-only image refuse this command?
  * @return OW_SUCCESS if it allows it, else the OW_ERROR reply's code:
  *         OW_INVALID_PACKET for a raw write, OW_FDA_REFUSED for the rest
- *         (user config write, DFU, raw I2C).
+ *         (user config write, DFU, raw I2C, setting or clearing the thermal
+ *         limits).
  */
 uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved);
 

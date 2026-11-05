@@ -50,6 +50,10 @@ uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t 
 			return (reserved == 1U) ? OW_FDA_REFUSED : OW_SUCCESS;
 		case OW_CMD_DFU:
 			return OW_FDA_REFUSED;
+		case OW_CTRL_SET_THERMAL_LIMITS:
+		case OW_CTRL_CLEAR_THERMAL_LIMITS:
+			// The limits are the linked preset's (thermal_limits.h).
+			return OW_FDA_REFUSED;
 		default:
 			return OW_SUCCESS;
 		}

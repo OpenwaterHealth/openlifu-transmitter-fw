@@ -14,7 +14,9 @@ typedef enum {
     TRIGGER_STATUS_READY = 0,
 	TRIGGER_STATUS_RUNNING = 1,
 	TRIGGER_STATUS_ERROR = 2,
-	TRIGGER_STATUS_NOT_CONFIGURED = 3
+	TRIGGER_STATUS_NOT_CONFIGURED = 3,
+	TRIGGER_STATUS_PAUSED = 4,    // between trains of a sequence, resumable
+	TRIGGER_STATUS_TIMEOUT = 5    // the treatment timeout ended it; STOP clears it
 } TriggerStatus;
 
 typedef enum {
@@ -68,6 +70,15 @@ uint32_t get_trigger_pulse_count(void);
 uint32_t get_trigger_period_us(void);
 uint8_t start_trigger_pulse(void);
 uint8_t stop_trigger_pulse(void);
+// Pause lands at the next train boundary (at once in a train's gap); the final
+// train runs out instead. Resume withdraws a pause that has not landed yet.
+bool pause_trigger_pulse(void);
+bool resume_trigger_pulse(void);
+// Treatment timeout (SR-024): total time since START, paused time included,
+// against the timeout armed with the thermal limits (thermal_limits.h).
+bool trigger_timeout_expired(void);
+// After stop_sequence() on expiry: TIMEOUT until STOP, unless every train was out.
+void trigger_end_timeout(void);
 void trigger_register_interlock(void);
 // True once after the host link was lost (port closed, cable pulled).
 bool trigger_take_host_lost(void);
@@ -104,5 +115,7 @@ void TRIG_TIM15_IRQHandler(void);
 __weak void pulse_complete_callback(uint32_t curr_count, uint32_t total_count);
 __weak void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count);
 __weak void sequence_complete_callback(uint32_t total_count) ;
+__weak void sequence_paused_callback(uint32_t curr_count, uint32_t total_count);
+__weak void sequence_timeout_callback(uint32_t curr_count, uint32_t total_count);
 
 #endif /* __TRIGGER_H */
