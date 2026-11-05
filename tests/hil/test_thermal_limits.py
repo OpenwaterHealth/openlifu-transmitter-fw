@@ -19,6 +19,7 @@ import time
 import pytest
 from conftest import (
     OW_CTRL_PAUSE_SWTRIG,
+    OW_CTRL_RESUME_SWTRIG,
     PRESET_INDEX,
     armed_limits,
     clear_thermal_limits,
@@ -229,6 +230,35 @@ def test_limits_refused_while_paused(txdevice, host_mode):
     for r in (set_thermal_limits(txdevice, start, start + 20.0, timeout_s=0), clear_thermal_limits(txdevice)):
         assert (r.packet_type, r.reserved) == (OW_ERROR, OW_PRESET_BUSY)
     assert armed_limits(txdevice) == before
+
+
+def test_resume_refused_at_shutoff_c_with_temp_too_high(txdevice, request, host_mode):
+    """A paused sequence at or above the armed shutoff_C stays paused, refused
+    with OW_TEMP_TOO_HIGH, the code START gives above start_C. Waits up to
+    --shutoff-wait s for the TX to warm a tenth or two with HV off."""
+    wait_s = request.config.getoption("--shutoff-wait")
+    trigger = txdevice.get_trigger_json()
+    _host_trigger(txdevice, TriggerMode=TRIGGER_MODE_SEQUENCE, TriggerPulseTrainCount=1000,
+                  TriggerPulseTrainInterval=max(int(trigger.get("TriggerPulseTrainInterval", 0)), 500_000))
+    start = _tenth_above(txdevice.get_temperature(), 1)
+    shutoff = round(start + 0.1, 1)
+    assert set_thermal_limits(txdevice, start, shutoff, timeout_s=0).packet_type != OW_ERROR
+
+    txdevice.start_trigger()
+    r = send_raw(txdevice, OW_CONTROLLER, OW_CTRL_PAUSE_SWTRIG)
+    assert r is not None and r.packet_type != OW_ERROR
+    assert _wait_status(txdevice, "PAUSED", 5.0), "the pause lands at the next train boundary"
+
+    deadline = time.monotonic() + wait_s
+    while txdevice.get_temperature() < shutoff and time.monotonic() < deadline:
+        time.sleep(0.5)
+    temp = txdevice.get_temperature()
+    if temp < shutoff:
+        pytest.fail(f"TX {temp:.2f} C never reached shutoff_C {shutoff} C in {wait_s:.0f} s: "
+                    "warm the transducer, or raise --shutoff-wait")
+    r = send_raw(txdevice, OW_CONTROLLER, OW_CTRL_RESUME_SWTRIG)
+    assert r is not None and (r.packet_type, r.reserved) == (OW_ERROR, OW_TEMP_TOO_HIGH)
+    assert txdevice.get_trigger()["trigger_status"] == "PAUSED", "the pause stays for a later resume"
 
 
 def test_host_timeout_ends_a_run_with_no_preset(txdevice, host_mode):

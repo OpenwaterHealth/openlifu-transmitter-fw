@@ -869,15 +869,19 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				}
 				break;
 			}
-			// Refused while hot, unlike START: the pause stays for a later resume.
-			// After a timeout the status is TIMEOUT, so that is refused here too.
-			if (get_trigger_status() != TRIGGER_STATUS_PAUSED || tx_overheat_flag) {
+			// Nothing paused to resume. After a timeout the status is TIMEOUT, so
+			// that is refused here too.
+			if (get_trigger_status() != TRIGGER_STATUS_PAUSED) {
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}
-			// The preset's shutoff_C, or no fresh reading, as a running sequence
-			// would be stopped by; start_C does not apply to a resume (SR-023).
-			if (presets_thermal_trip()) {
+			// Refused while hot, unlike START, with the same codes START gives:
+			// the pause stays for a later resume. The global overheat trip, then
+			// the armed shutoff_C or a stale reading, as a running sequence would
+			// be stopped by; start_C does not apply to a resume (SR-023).
+			uint8_t hot = tx_overheat_flag ? OW_TEMP_TOO_HIGH : presets_shutoff_check();
+			if (hot != OW_SUCCESS) {
+				uartResp->reserved = hot;
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}

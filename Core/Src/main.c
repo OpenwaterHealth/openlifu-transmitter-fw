@@ -719,7 +719,7 @@ int main(void)
       }
 
       // The armed shutoff_C, or a thermistor gone quiet, ends a run.
-      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
+      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_shutoff_check() != OW_SUCCESS)
       {
         (void)stop_sequence();
       }

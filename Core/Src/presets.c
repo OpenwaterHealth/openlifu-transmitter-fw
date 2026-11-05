@@ -560,9 +560,9 @@ uint8_t presets_start_check(void)
 	return thermal_limits_start_check(preset_loaded, temperature_fresh(), tx_temperature);
 }
 
-bool presets_thermal_trip(void)
+uint8_t presets_shutoff_check(void)
 {
-	return thermal_limits_trip(temperature_fresh(), tx_temperature);
+	return thermal_limits_shutoff_check(temperature_fresh(), tx_temperature);
 }
 
 // value / 10^decimals as "-1.5" (decimals 1) or "-1.52" (decimals 2): the

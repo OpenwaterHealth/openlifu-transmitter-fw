@@ -64,11 +64,12 @@ uint8_t thermal_limits_start_check(bool preset_loaded, bool fresh, float temp_c)
 	return OW_SUCCESS;
 }
 
-bool thermal_limits_trip(bool fresh, float temp_c)
+uint8_t thermal_limits_shutoff_check(bool fresh, float temp_c)
 {
-	if (limits.source == THERMAL_LIMITS_NONE) return false;
-	if (!fresh) return true;
-	return temp_c * 10.0f >= (float)limits.shutoff_c_x10;
+	if (limits.source == THERMAL_LIMITS_NONE) return OW_SUCCESS;
+	if (!fresh) return OW_TEMP_UNKNOWN;
+	if (temp_c * 10.0f >= (float)limits.shutoff_c_x10) return OW_TEMP_TOO_HIGH;
+	return OW_SUCCESS;
 }
 
 bool thermal_limits_timed_out(uint32_t elapsed_ms)

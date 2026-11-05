@@ -33,6 +33,7 @@ OW_CTRL_SET_THERMAL_LIMITS = 0x61
 OW_CTRL_CLEAR_THERMAL_LIMITS = 0x62
 # Sent raw, so these tests need no SDK with the pause API (SDK #89).
 OW_CTRL_PAUSE_SWTRIG = 0x2B
+OW_CTRL_RESUME_SWTRIG = 0x2E
 # Where the armed limits came from (Core/Inc/thermal_limits.h).
 LIMITS_SOURCES = {0: "none", 1: "preset", 2: "host"}
 

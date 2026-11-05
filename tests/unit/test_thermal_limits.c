@@ -48,11 +48,13 @@ static void test_start_check_with_limits(bool loaded)
 	CHECK(thermal_limits_start_check(loaded, false, 20.0f) == OW_TEMP_UNKNOWN);
 }
 
-static void test_trip_with_limits(void)
+static void test_shutoff_check_with_limits(void)
 {
-	CHECK(!thermal_limits_trip(true, 42.9f));
-	CHECK(thermal_limits_trip(true, 43.0f));
-	CHECK(thermal_limits_trip(false, 20.0f));
+	// Below shutoff_C runs on (or resumes); at it, too hot; stale, unknown.
+	CHECK(thermal_limits_shutoff_check(true, 42.9f) == OW_SUCCESS);
+	CHECK(thermal_limits_shutoff_check(true, 43.0f) == OW_TEMP_TOO_HIGH);
+	CHECK(thermal_limits_shutoff_check(true, 50.0f) == OW_TEMP_TOO_HIGH);
+	CHECK(thermal_limits_shutoff_check(false, 20.0f) == OW_TEMP_UNKNOWN);
 }
 
 static void test_timeout_of(uint32_t timeout_s)
@@ -79,7 +81,7 @@ static void test_load_arms_and_outlasts_the_load(void)
 	test_timeout_of(TIMEOUT_S);
 
 	test_start_check_with_limits(true);
-	test_trip_with_limits();
+	test_shutoff_check_with_limits();
 
 	// A raw write (or an unload) leaves the preset unloaded: the gate holds.
 #ifdef FDA_MODE
@@ -88,7 +90,7 @@ static void test_load_arms_and_outlasts_the_load(void)
 #else
 	test_start_check_with_limits(false);
 #endif
-	test_trip_with_limits();
+	test_shutoff_check_with_limits();
 	test_timeout_of(TIMEOUT_S);
 	CHECK(armed().source == THERMAL_LIMITS_PRESET);
 
@@ -109,7 +111,7 @@ static void test_fda_needs_a_load(void)
 	CHECK(armed().preset_index == 0xFF);
 	CHECK(thermal_limits_start_check(false, true, 20.0f) == OW_NO_PRESET);
 	CHECK(thermal_limits_start_check(true, true, 20.0f) == OW_NO_PRESET);
-	CHECK(!thermal_limits_trip(true, 100.0f));
+	CHECK(thermal_limits_shutoff_check(true, 100.0f) == OW_SUCCESS);
 	CHECK(armed().treatment_timeout_s == 0U);
 	test_no_timeout();
 }
@@ -132,7 +134,7 @@ static void test_none_armed_runs_ungated(void)
 	// Research use with nothing armed: only the global TX_OVERHEAT applies,
 	// and no timeout.
 	CHECK(thermal_limits_start_check(false, false, 100.0f) == OW_SUCCESS);
-	CHECK(!thermal_limits_trip(false, 100.0f));
+	CHECK(thermal_limits_shutoff_check(false, 100.0f) == OW_SUCCESS);
 	test_no_timeout();
 }
 
@@ -145,14 +147,14 @@ static void test_host_set_and_clear(void)
 	CHECK(l.start_c_x10 == START_X10 && l.shutoff_c_x10 == SHUTOFF_X10);
 	CHECK(l.treatment_timeout_s == TIMEOUT_S);
 	test_start_check_with_limits(false);
-	test_trip_with_limits();
+	test_shutoff_check_with_limits();
 	test_timeout_of(TIMEOUT_S);
 
 	// 0 disarms the timeout alone; the thermal limits still act.
 	CHECK(thermal_limits_set(START_X10, SHUTOFF_X10, 0U, false) == OW_SUCCESS);
 	CHECK(armed().source == THERMAL_LIMITS_HOST && armed().treatment_timeout_s == 0U);
 	test_start_check_with_limits(false);
-	test_trip_with_limits();
+	test_shutoff_check_with_limits();
 	test_no_timeout();
 	// The longest the u16 allows.
 	CHECK(thermal_limits_set(START_X10, SHUTOFF_X10, 0xFFFFU, false) == OW_SUCCESS);

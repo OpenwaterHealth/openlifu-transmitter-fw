@@ -75,8 +75,9 @@ typedef enum {
 	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
 	OW_FDA_REFUSED = 0xF8,       // a presets-only image refuses this (preset_policy.h)
 	// Presets: why OW_CTRL_START_SWTRIG was refused (presets_start_check()).
-	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading
-	OW_TEMP_TOO_HIGH = 0xFA,  // above the armed start_C (thermal_limits.h)
+	OW_TEMP_UNKNOWN = 0xF9,   // no fresh thermistor reading (START or RESUME)
+	OW_TEMP_TOO_HIGH = 0xFA,  // START: above the armed start_C; RESUME: at or above the
+	                          //   armed shutoff_C, or the overheat trip (thermal_limits.h)
 	OW_NO_PRESET = 0xFB,      // nothing loaded with OW_PRESET_LOAD yet
 	OW_UNKNOWN_COMMAND = 0xFC,
 	OW_BAD_CRC = 0xFD,

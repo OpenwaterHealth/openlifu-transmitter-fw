@@ -101,8 +101,14 @@ uint8_t thermal_limits_clear(bool running);
  */
 uint8_t thermal_limits_start_check(bool preset_loaded, bool fresh, float temp_c);
 
-/** Must a running sequence stop? At or above shutoff_C, or on a stale reading; never with none armed. */
-bool thermal_limits_trip(bool fresh, float temp_c);
+/**
+ * @brief  May a sequence go on running, or resume? The shutoff_C side, as
+ *         thermal_limits_start_check() is the start_C side.
+ * @return OW_SUCCESS (always, with none armed), or why not: OW_TEMP_UNKNOWN
+ *         on a stale reading, OW_TEMP_TOO_HIGH at or above shutoff_C. A
+ *         running sequence stops on either; a RESUME is refused with it.
+ */
+uint8_t thermal_limits_shutoff_check(bool fresh, float temp_c);
 
 /**
  * @brief  Has a sequence START-ed elapsed_ms ago, running or paused, reached
