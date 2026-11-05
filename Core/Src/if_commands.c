@@ -673,14 +673,15 @@ static uint16_t preset_loaded_reply(const UartPacket *cmd, uint8_t *reply)
 // train starts from the first profile with the slaves armed before its first edge.
 static void start_sequence(UartPacket *uartResp, bool resume)
 {
-	// The loaded preset's start_C decides; checked before anything is
-	// armed, so a refusal leaves no state to unwind. In FDA_MODE a preset
+	// The loaded preset's start_C decides a START; checked before anything
+	// is armed, so a refusal leaves no state to unwind. A RESUME is held
+	// to shutoff_C instead, by its caller (SR-023). In FDA_MODE a preset
 	// must be loaded; a standard image with none loaded runs the host's own
 	// configuration.
 #ifdef FDA_MODE
-	const bool gated = true;
+	const bool gated = !resume;
 #else
-	const bool gated = presets_loaded();
+	const bool gated = !resume && presets_loaded();
 #endif
 	if (gated) {
 		static char reason[64];
@@ -873,7 +874,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				break;
 			}
 			// Refused while hot, unlike START: the pause stays for a later resume.
+			// After a timeout the status is TIMEOUT, so that is refused here too.
 			if (get_trigger_status() != TRIGGER_STATUS_PAUSED || tx_overheat_flag) {
+				uartResp->packet_type = OW_ERROR;
+				break;
+			}
+			// The preset's shutoff_C, or no fresh reading, as a running sequence
+			// would be stopped by; start_C does not apply to a resume (SR-023).
+			if (presets_thermal_trip()) {
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}

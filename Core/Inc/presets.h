@@ -42,7 +42,9 @@
  *   regs_crc      over the blob's body, everything the firmware executes from
  *
  * Once a preset is loaded the trigger will not start above its start_C (or
- * without a fresh reading), and a running sequence stops at its shutoff_C.
+ * without a fresh reading), a running sequence stops at its shutoff_C, a
+ * paused one will not resume at it, and either ends as TIMEOUT once its
+ * treatment_timeout_s has passed since START.
  * With nothing loaded, an FDA_MODE image's trigger does not start; a standard
  * image's runs on the host's own configuration.
  *
@@ -90,13 +92,16 @@
  *     u32 trig_frequency_hz, u32 trig_pulse_count, u32 trig_train_interval_us
  *     u8  train_count_len, u32 train_counts[train_count_len]
  *     i16 start_c_x10, i16 shutoff_c_x10
+ *     u16 treatment_timeout_s  total time from START, pauses included, after
+ *                            which the run ends as TIMEOUT (SR-024); >= 1
  *     per chip:
  *       the base registers, as runs of consecutive addresses:
  *         u16 run_count, then per run: u16 start_addr, u16 n, u32 value[n]
  *       per profile, the registers each profile switch rewrites:
  *         u16 count, then per register: u16 addr, u32 value
  */
-#define PRESET_BLOB_VERSION 1u
+// 2 added treatment_timeout_s; a version 1 blob is refused, not defaulted.
+#define PRESET_BLOB_VERSION 2u
 
 #define PRESET_SLOTS       16u
 #define PRESET_SLOT_SIZE   2048u                       // one flash page
@@ -134,6 +139,8 @@ typedef struct {
 	// TX thermistor limits, tenths of a degree C (start_C / shutoff_C).
 	int16_t start_c_x10;
 	int16_t shutoff_c_x10;
+	// Treatment timeout, seconds from START (treatment_timeout_s).
+	uint16_t treatment_timeout_s;
 	uint32_t settings_crc;             // CRC-32 of the source .json bytes
 	uint32_t regs_crc;                 // CRC-32 of the body, as generated
 	const uint8_t *body;               // what regs_crc covers
