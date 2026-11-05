@@ -512,14 +512,13 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		return false;
 	}
 
-	trigger_set_timeout_s(preset.treatment_timeout_s);
-
 	// Make the starting profile active so the first trigger uses it.
 	for (uint8_t c = 0; c < chips; c++) {
 		TX7332_SetActiveDelayProfile(preset.profile_index, &transmitters[c], c);
 	}
 
-	thermal_limits_arm_preset(index, preset.start_c_x10, preset.shutoff_c_x10);
+	thermal_limits_arm_preset(index, preset.start_c_x10, preset.shutoff_c_x10,
+	                          preset.treatment_timeout_s);
 	loaded.index = index;
 	loaded.duration_index = (uint8_t)duration_index;
 	loaded.train_count = trains;

@@ -1,9 +1,16 @@
 /*
  * thermal_limits.h
  *
- * The TX thermistor limits that gate START and end a running sequence:
- *   start_C    the trigger does not start above it, or without a fresh reading
- *   shutoff_C  a running sequence stops at it, or when the reading goes stale
+ * The limits that gate START and end a running sequence: the TX thermistor's
+ * and the treatment timeout (SR-024).
+ *   start_C              the trigger does not start above it, or without a
+ *                        fresh reading
+ *   shutoff_C            a running sequence stops at it, or when the reading
+ *                        goes stale
+ *   treatment_timeout_s  a running or paused sequence ends as TIMEOUT this
+ *                        long after START (trigger.c); 0 is none. A preset
+ *                        always carries one (presets.h); only the host's SET
+ *                        or CLEAR leaves none.
  *
  * Their own state, not part of "a preset is loaded" (#59). OW_PRESET_LOAD arms
  * them from the preset. A raw register, profile or trigger write unloads the
@@ -38,6 +45,7 @@
 #include <stdint.h>
 
 // Where the armed limits came from (OW_CTRL_GET_THERMAL_LIMITS reply byte 0).
+// All three limits come from the same place: a SET or a load arms all three.
 typedef enum {
 	THERMAL_LIMITS_NONE = 0,     // none armed
 	THERMAL_LIMITS_PRESET = 1,   // the last preset this module loaded
@@ -49,10 +57,12 @@ typedef struct {
 	uint8_t preset_index;        // the preset that armed them; 0xFF unless source is PRESET
 	int16_t start_c_x10;         // tenths of a degree C; 0 when none are armed
 	int16_t shutoff_c_x10;
+	uint16_t treatment_timeout_s; // seconds from START, pauses included; 0: none
 } ThermalLimits;
 
 /** A preset loaded: arm its limits, whatever was armed before. */
-void thermal_limits_arm_preset(uint8_t preset_index, int16_t start_c_x10, int16_t shutoff_c_x10);
+void thermal_limits_arm_preset(uint8_t preset_index, int16_t start_c_x10, int16_t shutoff_c_x10,
+                               uint16_t treatment_timeout_s);
 
 /** What is armed now. */
 void thermal_limits_get(ThermalLimits *out);
@@ -61,15 +71,18 @@ void thermal_limits_get(ThermalLimits *out);
 
 /**
  * @brief  Arm the host's own limits, over whatever is armed. The caller
- *         unloads a loaded preset first.
+ *         unloads a loaded preset first. A treatment_timeout_s of 0 runs
+ *         with no timeout.
  * @return OW_SUCCESS; OW_INVALID_PACKET unless start_C is below shutoff_C;
  *         OW_PRESET_BUSY while a sequence runs or is paused (running). A
  *         refusal changes nothing.
  */
-uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool running);
+uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10,
+                           uint16_t treatment_timeout_s, bool running);
 
 /**
- * @brief  Disarm the limits. Nothing armed is not an error. The caller
+ * @brief  Disarm the limits, the timeout with them. Nothing armed is not an
+ *         error. The caller
  *         unloads a loaded preset first.
  * @return OW_SUCCESS, or OW_PRESET_BUSY, changing nothing, while a sequence
  *         runs or is paused (running).
@@ -90,5 +103,11 @@ uint8_t thermal_limits_start_check(bool preset_loaded, bool fresh, float temp_c)
 
 /** Must a running sequence stop? At or above shutoff_C, or on a stale reading; never with none armed. */
 bool thermal_limits_trip(bool fresh, float temp_c);
+
+/**
+ * @brief  Has a sequence START-ed elapsed_ms ago, running or paused, reached
+ *         the armed treatment timeout? Never, with none (0).
+ */
+bool thermal_limits_timed_out(uint32_t elapsed_ms);
 
 #endif /* INC_THERMAL_LIMITS_H_ */

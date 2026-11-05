@@ -27,6 +27,7 @@ from openlifu_sdk.io.LIFUTXPresets import (
     regs_crc,
     thermal_limits,
     train_count_selections,
+    treatment_timeout,
 )
 
 
@@ -61,8 +62,9 @@ def test_thermal_limits_are_the_presets_and_cannot_be_changed(
     armed = armed_limits(txdevice)
     assert armed["source"] == "preset" and armed["preset_index"] == PRESET_INDEX
     assert armed["x10"] == tuple(thermal_limits(machine_config))
+    assert armed["treatment_timeout_s"] == treatment_timeout(machine_config)
 
-    for r in (set_thermal_limits(txdevice, 10.0, 90.0), clear_thermal_limits(txdevice)):
+    for r in (set_thermal_limits(txdevice, 10.0, 90.0, timeout_s=0), clear_thermal_limits(txdevice)):
         assert r is not None and (r.packet_type, r.reserved) == (OW_ERROR, OW_FDA_REFUSED)
     assert armed_limits(txdevice) == armed
 

@@ -41,12 +41,12 @@
  *   settings_crc  over the preset .json the blob was generated from
  *   regs_crc      over the blob's body, everything the firmware executes from
  *
- * A load also arms the preset's start_C and shutoff_C (thermal_limits.h): the
- * trigger will not start above start_C (or without a fresh reading), a
- * running sequence stops at shutoff_C, and a paused one will not resume at
- * it. The limits outlast the load: a raw write, an unload or a timeout leaves
- * them armed. A sequence ends as TIMEOUT once the loaded preset's
- * treatment_timeout_s has passed since START. With nothing loaded, an
+ * A load also arms the preset's start_C, shutoff_C and treatment_timeout_s
+ * (thermal_limits.h): the trigger will not start above start_C (or without a
+ * fresh reading), a running sequence stops at shutoff_C, a paused one will
+ * not resume at it, and a running or paused one ends as TIMEOUT once
+ * treatment_timeout_s has passed since START. The limits outlast the load: a
+ * raw write, an unload or a timeout leaves them armed. With nothing loaded, an
  * FDA_MODE image's trigger does not start; a standard image's runs on the
  * host's own configuration, under whatever limits are armed.
  *
@@ -95,7 +95,9 @@
  *     u8  train_count_len, u32 train_counts[train_count_len]
  *     i16 start_c_x10, i16 shutoff_c_x10
  *     u16 treatment_timeout_s  total time from START, pauses included, after
- *                            which the run ends as TIMEOUT (SR-024); >= 1
+ *                            which the run ends as TIMEOUT (SR-024); >= 1,
+ *                            so every preset has one (only the host's
+ *                            SET_THERMAL_LIMITS may arm none)
  *     per chip:
  *       the base registers, as runs of consecutive addresses:
  *         u16 run_count, then per run: u16 start_addr, u16 n, u32 value[n]

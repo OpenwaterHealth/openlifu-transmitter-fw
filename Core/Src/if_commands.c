@@ -1487,7 +1487,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 #endif
 		{
 			// The master's limits are the ones that act (thermal_limits.h).
-			static uint8_t limits_reply[6];
+			static uint8_t limits_reply[8];
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
 			uartResp->reserved = cmd->reserved;
@@ -1504,12 +1504,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				(void)presets_unload();
 			}
 			if (result == OW_SUCCESS && cmd->command == OW_CTRL_SET_THERMAL_LIMITS) {
-				// Payload: start_C and shutoff_C, i16 tenths of a degree C, LE.
+				// Payload: start_C and shutoff_C, i16 tenths of a degree C, then
+				// treatment_timeout_s, u16 (0: none), all LE.
 				result = OW_INVALID_PACKET;
-				if (cmd->data != NULL && cmd->data_len == 4U) {
+				if (cmd->data != NULL && cmd->data_len == 6U) {
 					int16_t start = (int16_t)(cmd->data[0] | ((uint16_t)cmd->data[1] << 8));
 					int16_t shutoff = (int16_t)(cmd->data[2] | ((uint16_t)cmd->data[3] << 8));
-					result = thermal_limits_set(start, shutoff, running);
+					uint16_t timeout_s = (uint16_t)(cmd->data[4] | ((uint16_t)cmd->data[5] << 8));
+					result = thermal_limits_set(start, shutoff, timeout_s, running);
 				}
 			} else if (result == OW_SUCCESS && cmd->command == OW_CTRL_CLEAR_THERMAL_LIMITS) {
 				result = thermal_limits_clear(running);
@@ -1529,6 +1531,8 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			limits_reply[3] = (uint8_t)((uint16_t)armed.start_c_x10 >> 8);
 			limits_reply[4] = (uint8_t)((uint16_t)armed.shutoff_c_x10);
 			limits_reply[5] = (uint8_t)((uint16_t)armed.shutoff_c_x10 >> 8);
+			limits_reply[6] = (uint8_t)armed.treatment_timeout_s;
+			limits_reply[7] = (uint8_t)(armed.treatment_timeout_s >> 8);
 			uartResp->data_len = sizeof(limits_reply);
 			uartResp->data = limits_reply;
 			break;

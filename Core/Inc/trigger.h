@@ -74,9 +74,8 @@ uint8_t stop_trigger_pulse(void);
 // train runs out instead. Resume withdraws a pause that has not landed yet.
 bool pause_trigger_pulse(void);
 bool resume_trigger_pulse(void);
-// Treatment timeout (SR-024): total time since START, paused time included.
-// 0 disables it; a preset load sets it from the preset.
-void trigger_set_timeout_s(uint32_t timeout_s);
+// Treatment timeout (SR-024): total time since START, paused time included,
+// against the timeout armed with the thermal limits (thermal_limits.h).
 bool trigger_timeout_expired(void);
 // After stop_sequence() on expiry: TIMEOUT until STOP, unless every train was out.
 void trigger_end_timeout(void);

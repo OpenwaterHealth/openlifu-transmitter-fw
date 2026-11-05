@@ -1,7 +1,7 @@
 """A standard image's thermal limits: their own state, apart from the load (#59).
 
-start_C and shutoff_C are armed by a load or by the host, and stay armed
-through a raw write or an unload. A host set or clear unloads a loaded preset,
+start_C, shutoff_C and the treatment timeout are armed by a load or by the
+host, and stay armed through a raw write or an unload. A host set or clear unloads a loaded preset,
 as a raw write does. Armed, they gate START and end a run whether or not a
 preset is loaded. Needs a bare-metal standard image to store the
 preset in slot 0 (conftest.py); skipped on +fda / +test, where
@@ -18,6 +18,7 @@ import time
 
 import pytest
 from conftest import (
+    OW_CTRL_PAUSE_SWTRIG,
     PRESET_INDEX,
     armed_limits,
     clear_thermal_limits,
@@ -35,9 +36,11 @@ from openlifu_sdk.io.LIFUConfig import (
     OW_PRESET_BUSY,
     OW_TEMP_TOO_HIGH,
 )
-from openlifu_sdk.io.LIFUTXPresets import load_preset, thermal_limits
+from openlifu_sdk.io.LIFUTXPresets import load_preset, thermal_limits, treatment_timeout
 
-# The trigger's TriggerMode for a run that goes on until stopped (trigger.h).
+# The trigger's TriggerModes (trigger.h): trains that can pause, and a run
+# that goes on until stopped.
+TRIGGER_MODE_SEQUENCE = 0
 TRIGGER_MODE_CONTINUOUS = 1
 
 
@@ -57,6 +60,15 @@ def _host_trigger(txdevice, **changes) -> None:
         data=bytearray(json.dumps(trigger).encode("ascii")),
     )
     assert r is not None and r.packet_type != OW_ERROR
+
+
+def _wait_status(txdevice, status: str, wait_s: float) -> bool:
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        if txdevice.get_trigger()["trigger_status"] == status:
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def _tenth_above(celsius: float, tenths: int) -> float:
@@ -80,6 +92,7 @@ def test_limits_stay_armed_after_a_raw_write(txdevice, machine_config, preset_in
     armed = armed_limits(txdevice)
     assert armed["source"] == "preset" and armed["preset_index"] == PRESET_INDEX
     assert armed["x10"] == tuple(thermal_limits(machine_config))
+    assert armed["treatment_timeout_s"] == treatment_timeout(machine_config)
 
     _host_trigger(txdevice)
 
@@ -92,7 +105,7 @@ def test_limits_stay_armed_after_a_raw_write(txdevice, machine_config, preset_in
 
 
 def test_host_set_and_clear(txdevice, host_mode):
-    r = set_thermal_limits(txdevice, 40.0, 43.0)
+    r = set_thermal_limits(txdevice, 40.0, 43.0, timeout_s=1800)
     armed = decode_thermal_limits(r)
     assert armed == {
         "source": "host",
@@ -100,11 +113,17 @@ def test_host_set_and_clear(txdevice, host_mode):
         "x10": (400, 430),
         "start_c": 40.0,
         "shutoff_c": 43.0,
+        "treatment_timeout_s": 1800,
     }
     assert armed_limits(txdevice) == armed
 
+    # 0: the thermal limits without a timeout.
+    no_timeout = decode_thermal_limits(set_thermal_limits(txdevice, 40.0, 43.0, timeout_s=0))
+    assert no_timeout["source"] == "host" and no_timeout["treatment_timeout_s"] == 0
+
     cleared = decode_thermal_limits(clear_thermal_limits(txdevice))
     assert cleared["source"] == "none" and cleared["x10"] == (0, 0)
+    assert cleared["treatment_timeout_s"] == 0
     assert armed_limits(txdevice) == cleared
 
 
@@ -125,8 +144,9 @@ def test_host_set_or_clear_unloads_a_preset(txdevice, machine_config, preset_in_
     # Load, then modify: the preset no longer describes what is armed.
     load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
     assert loaded(txdevice)["loaded"]
-    armed = decode_thermal_limits(set_thermal_limits(txdevice, 30.0, 35.0))
+    armed = decode_thermal_limits(set_thermal_limits(txdevice, 30.0, 35.0, timeout_s=0))
     assert armed["source"] == "host" and armed["x10"] == (300, 350)
+    assert armed["treatment_timeout_s"] == 0, "the preset's timeout goes with its limits"
     assert not loaded(txdevice)["loaded"], "a host set unloads, as a raw write does"
 
     load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
@@ -153,7 +173,8 @@ def test_start_refused_above_start_c_with_no_preset(txdevice, host_mode):
     before = armed_limits(txdevice)
     txdevice.start_trigger()
     # The run keeps the limits it started under.
-    for r in (set_thermal_limits(txdevice, 30.0, 35.0), clear_thermal_limits(txdevice)):
+    for r in (set_thermal_limits(txdevice, 30.0, 35.0), set_thermal_limits(txdevice, start, start + 20.0),
+              clear_thermal_limits(txdevice)):
         assert (r.packet_type, r.reserved) == (OW_ERROR, OW_PRESET_BUSY)
     assert armed_limits(txdevice) == before
     txdevice.stop_trigger()
@@ -190,3 +211,40 @@ def test_shutoff_stops_a_run(txdevice, request, host_mode):
     # The firmware stops at shutoff_C, or on a reading gone stale.
     assert stopped_at >= shutoff - 0.1, f"stopped at {stopped_at:.2f} C, below shutoff_C {shutoff} C"
     assert armed_limits(txdevice)["source"] == "host", "a trip leaves the limits armed"
+
+
+def test_limits_refused_while_paused(txdevice, host_mode):
+    """A paused sequence resumes on the limits and timeout it started under."""
+    trigger = txdevice.get_trigger_json()
+    _host_trigger(txdevice, TriggerMode=TRIGGER_MODE_SEQUENCE, TriggerPulseTrainCount=1000,
+                  TriggerPulseTrainInterval=max(int(trigger.get("TriggerPulseTrainInterval", 0)), 500_000))
+    start = _tenth_above(txdevice.get_temperature(), 20)
+    assert set_thermal_limits(txdevice, start, start + 20.0, timeout_s=600).packet_type != OW_ERROR
+    before = armed_limits(txdevice)
+
+    txdevice.start_trigger()
+    r = send_raw(txdevice, OW_CONTROLLER, OW_CTRL_PAUSE_SWTRIG)
+    assert r is not None and r.packet_type != OW_ERROR
+    assert _wait_status(txdevice, "PAUSED", 5.0), "the pause lands at the next train boundary"
+    for r in (set_thermal_limits(txdevice, start, start + 20.0, timeout_s=0), clear_thermal_limits(txdevice)):
+        assert (r.packet_type, r.reserved) == (OW_ERROR, OW_PRESET_BUSY)
+    assert armed_limits(txdevice) == before
+
+
+def test_host_timeout_ends_a_run_with_no_preset(txdevice, host_mode):
+    _host_trigger(txdevice, TriggerMode=TRIGGER_MODE_CONTINUOUS)
+    start = _tenth_above(txdevice.get_temperature(), 20)
+    assert set_thermal_limits(txdevice, start, start + 20.0, timeout_s=2).packet_type != OW_ERROR
+    assert not loaded(txdevice)["loaded"]
+
+    txdevice.start_trigger()
+    assert _wait_status(txdevice, "TIMEOUT", 5.0), "a 2 s treatment timeout ends the run"
+    assert armed_limits(txdevice)["treatment_timeout_s"] == 2, "and stays armed"
+    txdevice.stop_trigger()
+
+    # 0: no timeout, so the run outlasts 2 s.
+    assert set_thermal_limits(txdevice, start, start + 20.0, timeout_s=0).packet_type != OW_ERROR
+    txdevice.start_trigger()
+    time.sleep(3.0)
+    assert txdevice.get_trigger()["trigger_status"] == "RUNNING"
+    txdevice.stop_trigger()
