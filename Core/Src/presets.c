@@ -27,6 +27,14 @@ static int16_t loaded_shutoff_c_x10 = 0;
 // and storing over its slot unloads it.
 static PresetLoaded loaded;
 
+// A sequence is under way, running or paused to resume on what it was loaded
+// with: the presets, and the registers they set, cannot change now.
+static bool sequence_under_way(void)
+{
+	uint8_t status = get_trigger_status();
+	return status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED;
+}
+
 // Where one preset's blob is, and how long.
 typedef struct {
 	const uint8_t *data;
@@ -288,8 +296,9 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
 	uint8_t next = (uint8_t)(slot + 1U);
 	if (new_slots > old_slots && (next >= PRESET_SLOTS || header_len(next) != 0U)) return OW_PRESET_NO_ROOM;
 
-	// A flash erase stalls the core for milliseconds, trigger ISRs included.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	// A flash erase stalls the core for milliseconds, trigger ISRs included,
+	// and storing over the loaded slot would unload a paused sequence.
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	// Erase whatever the old blob held as well, so a shorter one frees its second slot.
 	uint8_t span = (new_slots > old_slots) ? new_slots : old_slots;
@@ -313,7 +322,7 @@ uint8_t presets_delete(uint8_t slot)
 	uint32_t len = slot_len(slot, &tail);
 	if (tail) return OW_PRESET_SLOT_TAIL;
 	if (len == 0U) return OW_SUCCESS;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	uint32_t base = slot_address(slot);
 	slots_changing(slot, slots_for(len));
@@ -428,8 +437,8 @@ static bool find_apodization(const uint8_t *p, uint32_t *value)
 bool presets_unload(void)
 {
 	// What a running sequence was loaded with stays: the thermal shutoff is
-	// watching its limits.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	// watching its limits. A paused one resumes on them.
+	if (sequence_under_way()) return false;
 	preset_loaded = false;
 	return true;
 }
@@ -521,7 +530,7 @@ bool presets_raw_write(bool here)
 {
 	// A raw write while nothing is loaded is the research case: let it be.
 	if (!preset_loaded) return true;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	if (sequence_under_way()) return false;
 	if (here) preset_loaded = false;
 	return true;
 }

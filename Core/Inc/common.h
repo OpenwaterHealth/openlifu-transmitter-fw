@@ -67,7 +67,7 @@ typedef enum {
 typedef enum {
 	OW_SUCCESS = 0x00,
 	// Why a preset could not be stored or deleted (presets.h).
-	OW_PRESET_BUSY = 0xF2,       // trigger running; the presets cannot change now (also: a raw
+	OW_PRESET_BUSY = 0xF2,       // sequence running or paused; the presets cannot change now (also: a raw
 	                             //   write while a loaded preset runs)
 	OW_PRESET_NO_ROOM = 0xF3,    // blob needs the next slot too, and it is taken or missing
 	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
@@ -130,6 +130,8 @@ typedef enum {
 	OW_CTRL_SET_PATTERN_PROFILE = 0x28,  // 0x28 and 0x29 skip the UstxTX7332Commands block since we're out of hex values
 	OW_CTRL_GET_PATTERN_PROFILE = 0x29,
 	OW_CTRL_ARM_PROFILE_CYCLE = 0x2A,    // master -> slave(s) only, cycle profiles off the shared trigger line
+	OW_CTRL_PAUSE_SWTRIG = 0x2B,         // stop a sequence at the next train boundary, resumable
+	OW_CTRL_RESUME_SWTRIG = 0x2E,        // continue it from the next train (0x2C/0x2D are TX7332)
 } UstxControllerCommands;
 
 typedef enum {

@@ -5,7 +5,7 @@
  * host picks one with OW_PRESET_LOAD.
  *
  *   FDA_MODE  a presets-only image (+fda, +test): one preset, linked into
- *             the image at the end of the application slot (pages 124-125,
+ *             the image at the end of the application slot (pages 108-109,
  *             the FDA linker scripts' FDA_PRESET region), from
  *             Core/Inc/presets/fda_preset.h. Flashing or updating the image
  *             writes it; nothing in the image writes it, or the user config.
@@ -18,7 +18,8 @@
  *             which then has no preset of its own. The host also keeps the
  *             registers and the trigger: a raw register, profile or trigger
  *             write leaves nothing loaded on the module that runs it, and is
- *             refused (OW_PRESET_BUSY) while a loaded preset runs.
+ *             refused (OW_PRESET_BUSY) while a loaded preset runs or is
+ *             paused.
  *
  * Each module keeps its own load: a raw write to one module's chips unloads
  * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
@@ -185,14 +186,15 @@ uint32_t presets_regs_crc(const Preset *preset);
  * execution order so the trigger ISRs can cycle profiles, applies the
  * preset's trigger timing, and activates its starting profile.
  *
- * A refusal leaves nothing loaded, except while a trigger is running, when
- * the load in use is left as it is.
+ * A refusal leaves nothing loaded, except while a sequence is running or
+ * paused, when the load in use is left as it is.
  *
  * @param duration_index        which of the preset's train_counts to run.
  * @param expected_regs_crc     the regs_crc the host computed for this preset.
  * @param expected_settings_crc the CRC-32 of the host's preset file.
  * @return true on success; false on a bad index, a duration index the
- *         preset does not offer, a CRC mismatch, or if a trigger is running.
+ *         preset does not offer, a CRC mismatch, or if a sequence is running or
+ *         paused.
  */
 bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs_crc,
                   uint32_t expected_settings_crc);
@@ -202,7 +204,7 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
  *
  * What the host asks for when the console did not take the same preset.
  *
- * @return false, changing nothing, if a trigger is running.
+ * @return false, changing nothing, if a sequence is running or paused.
  */
 bool presets_unload(void);
 
@@ -212,8 +214,8 @@ bool presets_unload(void);
  *         another one it is forwarded to. Here, leave nothing loaded, since
  *         the loaded preset no longer describes the chips; elsewhere, that
  *         module unloads itself when it runs the write.
- * @return false, changing nothing, if a loaded preset is running here: the
- *         write would change it mid-burst and is refused. Only the master
+ * @return false, changing nothing, if a loaded preset is running or paused
+ *         here: the write would change it mid-sequence and is refused. Only the master
  *         runs the trigger, so a module never refuses (#57). With nothing
  *         loaded, always true.
  */

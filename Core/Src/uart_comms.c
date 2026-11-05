@@ -789,7 +789,8 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
     }
 }
 
-void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
+// STATUS:RUNNING,MODE:SEQUENCE,PULSE_TRAIN:[2/5],PULSE:[3/10],TEMP_TX:32.6,TEMP_AMBIENT:29.1
+static void send_trigger_status(const char *status, uint32_t curr_count, uint32_t total_count) {
 	if(async_enabled){
 		int tx_temp_int = (int)(tx_temperature * 10);  // e.g. 32.6 → 326
 		int amb_temp_int = (int)(ambient_temperature * 10);  // e.g. 32.6 → 326
@@ -799,12 +800,13 @@ void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
 
         // Format full status string
         int len = snprintf((char*)owDataBuffer, sizeof(owDataBuffer),
-            "STATUS:RUNNING,"
+            "STATUS:%s,"
             "MODE:%s,"
             "PULSE_TRAIN:[%lu/%lu],"
             "PULSE:[%lu/%lu],"
             "TEMP_TX:%d.%d,"
             "TEMP_AMBIENT:%d.%d",
+			status,
 			get_trigger_mode_str(),
             (unsigned long)curr_count,
             (unsigned long)total_count,
@@ -821,7 +823,6 @@ void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
             len = 0;
         }
 
-		// Called after pulse trains are done
 		ow_data_packet.packet_type = OW_DATA;
 		ow_data_packet.id = 0;
 		ow_data_packet.addr = 0;
@@ -830,54 +831,25 @@ void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
 		ow_data_packet.data = owDataBuffer;
 		comms_interface_send(&ow_data_packet);
 	}
-
 }
 
-// STATUS:RUNNING,MODE:SEQUENCE,PULSE_TRAIN:[2/5],PULSE:[3/10],TEMP_TX:32.6,TEMP_AMBIENT:29.1
+// Called after pulse trains are done
+void pulsetrain_complete_callback(uint32_t curr_count, uint32_t total_count) {
+	send_trigger_status("RUNNING", curr_count, total_count);
+}
+
 void sequence_complete_callback(uint32_t total_count) {
 	// If auto-cycle was active, stop it now that the sequence is done.
 	if (auto_cycle_is_active()) {
 		auto_cycle_stop();
 	}
 
-	if(async_enabled){
+	send_trigger_status("STOPPED", total_count, total_count);
+}
 
-		int tx_temp_int = (int)(tx_temperature * 10);  // e.g. 32.6 → 326
-		int amb_temp_int = (int)(ambient_temperature * 10);  // e.g. 32.6 → 326
-
-        // Format full status string
-        int len = snprintf((char*)owDataBuffer, sizeof(owDataBuffer),
-            "STATUS:STOPPED,"
-            "MODE:%s,"
-            "PULSE_TRAIN:[%lu/%lu],"
-            "PULSE:[%lu/%lu],"
-            "TEMP_TX:%d.%d,"
-            "TEMP_AMBIENT:%d.%d",
-			get_trigger_mode_str(),
-            (unsigned long)total_count,
-            (unsigned long)total_count,
-            (unsigned long)0,
-            (unsigned long)0,
-			tx_temp_int/10,
-			abs(tx_temp_int % 10),
-			amb_temp_int/10,
-			abs(amb_temp_int % 10)
-        );
-
-        if (len < 0 || len >= sizeof(owDataBuffer)) {
-            // Handle truncation or error
-            len = 0;
-        }
-
-		// Called after pulse trains are done
-		ow_data_packet.packet_type = OW_DATA;
-		ow_data_packet.id = 0;
-		ow_data_packet.addr = 0;
-		ow_data_packet.reserved = 0;
-		ow_data_packet.data_len = len;
-		ow_data_packet.data = owDataBuffer;
-		comms_interface_send(&ow_data_packet);
-	}
+// curr_count is the trains delivered; resume starts the next one.
+void sequence_paused_callback(uint32_t curr_count, uint32_t total_count) {
+	send_trigger_status("PAUSED", curr_count, total_count);
 }
 
 void pulse_complete_callback(uint32_t curr_count, uint32_t total_count) {
