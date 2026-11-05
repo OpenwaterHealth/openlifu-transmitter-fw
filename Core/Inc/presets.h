@@ -4,14 +4,19 @@
  * Presets the firmware -- not the host -- programs the TX7332 chips from. The
  * host picks one with OW_PRESET_LOAD.
  *
- *   FDA_MODE  a presets-only image (+fda, +test): one preset, linked into
- *             the image right after the code (the linker scripts'
- *             .fda_preset section), so the signature covers it, from
- *             Core/Inc/presets/fda_preset.h. Flashing or updating the image
- *             writes it; nothing in the image writes it, or the user config.
- *             The host may load the preset and change nothing else: not the
+ *   FDA_MODE  the presets-only image (+fda, +test): the presets it runs are
+ *             linked into it, so the signature covers them, and nothing in
+ *             the image writes them, or the user config. The host may load a
+ *             preset and change nothing else: not the
  *             registers, the trigger, the user config or the firmware
- *             (preset_policy.h).
+ *             (preset_policy.h). Either
+ *               one preset, right after the code (the linker scripts'
+ *               .fda_preset section), from Core/Inc/presets/fda_preset.h; or
+ *               PRESET_TABLE: a set of PRESET_COUNT presets, index i being
+ *               the set's i-th, from Core/Inc/presets/preset_table.h (the
+ *               SDK's generate_preset_set) and the headers it includes.
+ *             CMake picks whichever header the tree has. Flashing or updating
+ *             the image writes them.
  *   standard  every other build: presets in pages 110-125, above the
  *             application slot: 16 slots of one page, slot N being preset
  *             index N. A blob longer than a page runs on into the next slot,
@@ -112,12 +117,20 @@
 #define PRESET_SLOT_SIZE   2048u                       // one flash page
 #define PRESET_BLOB_MAX    (2u * PRESET_SLOT_SIZE)     // a blob may take two slots
 
-// Preset indexes: FDA mode runs one preset, from slot 0; standard has every slot.
-#ifdef FDA_MODE
-#define PRESET_COUNT 1u
-#else
+// Preset indexes: a standard image has every slot; FDA mode runs the presets linked in,
+// one from fda_preset.h, or as many as the generated preset_table.h defines.
+#ifndef FDA_MODE
 #define PRESET_COUNT PRESET_SLOTS
+#elif !defined(PRESET_TABLE)
+#define PRESET_COUNT 1u
 #endif
+
+// Where one preset's blob is, and how long. preset_table.h lists the linked
+// set as these.
+typedef struct {
+	const uint8_t *data;
+	uint32_t len;
+} PresetBlob;
 
 // A blob, parsed and bounds-checked by presets_get(). The pointers aim into
 // the blob, where multi-byte fields sit unaligned: read train counts with

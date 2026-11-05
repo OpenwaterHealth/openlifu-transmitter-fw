@@ -1,10 +1,12 @@
-"""Hardware-in-the-loop fixtures: a transmitter on USB and the preset its image holds.
+"""Hardware-in-the-loop fixtures: a transmitter on USB and the presets its image holds.
 
-Run from the repo root with the openlifu SDK installed:
+Run from the repo root with the openlifu SDK installed, naming the presets the
+image was built with -- one preset file, or a whole preset context:
 
     pytest tests/hil --preset path/to/<preset>.json
+    pytest tests/hil --context path/to/preset_settings/<context>
 
-Skipped unless --preset is given and a transmitter answers on USB.
+Skipped unless one is given and a transmitter answers on USB.
 
 A presets-only (FDA_MODE) image reports its preset set as a version suffix,
 +fda or +test, and holds preset 0 built in. A standard image has no suffix;
@@ -39,12 +41,22 @@ LIMITS_SOURCES = {0: "none", 1: "preset", 2: "host"}
 
 PRESET_INDEX = 0
 
+# The version suffixes of a presets-only image: the preset context it links.
+PRESETS_ONLY = ("fda", "test")
+
 
 def pytest_addoption(parser):
     parser.addoption(
         "--preset",
         default=None,
         help="The preset .json the flashed image's preset 0 was generated from.",
+    )
+    parser.addoption(
+        "--context",
+        default=None,
+        help="A preset context folder (presets.json, then <id>/<id>_settings.json per "
+        "preset), as in openlifu-diathermy-application's preset_settings/<context>: "
+        "the set a presets-only image links, in index order.",
     )
     parser.addoption(
         "--shutoff-wait",
@@ -55,15 +67,48 @@ def pytest_addoption(parser):
     )
 
 
-@pytest.fixture(scope="session")
-def machine_config(request):
-    path = request.config.getoption("--preset")
-    if path is None:
-        pytest.skip("no --preset given")
-    raw = Path(path).read_bytes()
+def _compile(path: Path, preset=None) -> dict:
+    raw = path.read_bytes()
     # A released settings .json carries no "id": it comes from the file name,
     # as generate_presets.py named the preset built into the image.
-    return compile_preset(json.loads(raw), preset_id=preset_id(path), settings_bytes=raw)
+    return compile_preset(
+        json.loads(raw), preset_id=preset or preset_id(str(path)), settings_bytes=raw
+    )
+
+
+def _preset_set(config) -> list:
+    """The presets named on the command line, in index order; [] if none."""
+    preset, context = config.getoption("--preset"), config.getoption("--context")
+    if preset and context:
+        raise pytest.UsageError("give --preset or --context, not both")
+    if preset:
+        return [_compile(Path(preset))]
+    if context:
+        folder = Path(context)
+        ids = json.loads((folder / "presets.json").read_text(encoding="utf-8"))["presets"]
+        return [_compile(folder / i / f"{i}_settings.json", i) for i in ids]
+    return []
+
+
+def pytest_generate_tests(metafunc):
+    # One case per index of the set; one case (that skips) without a set.
+    if "preset_index" in metafunc.fixturenames:
+        n = len(_preset_set(metafunc.config)) or 1
+        metafunc.parametrize("preset_index", range(n))
+
+
+@pytest.fixture(scope="session")
+def preset_set(request) -> list:
+    presets = _preset_set(request.config)
+    if not presets:
+        pytest.skip("no --preset or --context given")
+    return presets
+
+
+@pytest.fixture(scope="session")
+def machine_config(preset_set):
+    """Preset 0: the one preset, or the first of the set."""
+    return preset_set[PRESET_INDEX]
 
 
 @pytest.fixture(scope="session")
@@ -139,7 +184,7 @@ def variant(txdevice) -> str:
     _, plus, suffix = version.partition("+")
     if not plus:
         return "standard"
-    if suffix in ("fda", "test"):
+    if suffix in PRESETS_ONLY:
         return suffix
     pytest.skip(f"image reports an unknown build variant ({version})")
 

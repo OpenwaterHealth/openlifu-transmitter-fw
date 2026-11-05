@@ -133,17 +133,19 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # ---------------------------
 # Two builds (Core/Inc/presets.h):
 #
-# FDA_MODE, a presets-only image, links one read-only preset into the image
-# right after the code, so the signature covers it: the host loads the preset
-# and can change nothing else (preset_policy.c). Its header,
-# Core/Inc/presets/fda_preset.h, comes from the openlifu SDK's
-# examples/generate_presets.py.
+# FDA_MODE is the presets-only image: it links its presets in, right after
+# the code so the signature covers them, and the host loads a preset and can
+# change nothing else (preset_policy.c). The openlifu SDK generates the
+# presets into Core/Inc/presets/, and the tree holds one of:
+#   fda_preset.h    one preset (.fda_preset); generate_fda_preset
+#   preset_table.h  a set of presets, as const data (PRESET_TABLE);
+#                   generate_preset_set
 #
 # Every other build is a standard image: the host owns the TX7332 registers
 # and the trigger, and may also load presets from pages 110-125. Only a
 # bare-metal standard image can store presets there, since the bootloader's
 # slot still covers pages 110-125.
-option(FDA_MODE "One read-only preset, linked into the image" OFF)
+option(FDA_MODE "Presets-only: one preset or a set, linked into the image, read-only" OFF)
 
 # A presets-only (FDA_MODE) image reports which preset set it carries:
 # "fda" (the released preset) or "test" (the test presets). It must match a
@@ -156,14 +158,26 @@ endif()
 
 if(FDA_MODE)
     set(FDA_PRESET_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/fda_preset.h")
-    if(NOT EXISTS "${FDA_PRESET_HEADER}")
-        message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER}: generate it with the openlifu SDK's "
-                            "examples/generate_presets.py.")
+    set(PRESET_TABLE_HEADER "${CMAKE_SOURCE_DIR}/Core/Inc/presets/preset_table.h")
+    if(EXISTS "${FDA_PRESET_HEADER}" AND EXISTS "${PRESET_TABLE_HEADER}")
+        message(FATAL_ERROR "FDA_MODE found both ${FDA_PRESET_HEADER} and ${PRESET_TABLE_HEADER}: "
+                            "keep only the preset set this image is for.")
+    elseif(EXISTS "${PRESET_TABLE_HEADER}")
+        # The fda set is the one released preset; a set of several is never it.
+        if(FW_PRESET_VARIANT STREQUAL "fda")
+            message(FATAL_ERROR "FW_PRESET_VARIANT=fda links one preset (fda_preset.h), "
+                                "not ${PRESET_TABLE_HEADER}.")
+        endif()
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE PRESET_TABLE)
+        message(STATUS "FDA mode    : ON (preset set from preset_table.h, host writes refused)")
+    elseif(EXISTS "${FDA_PRESET_HEADER}")
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
+        message(STATUS "FDA mode    : ON (preset linked in after the code, host writes refused)")
+    else()
+        message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER} or ${PRESET_TABLE_HEADER}: generate "
+                            "them with the openlifu SDK (generate_fda_preset / generate_preset_set).")
     endif()
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_MODE)
     set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
-
-    message(STATUS "FDA mode    : ON (preset linked in after the code, host writes refused)")
 else()
     set(FW_BUILD_VARIANT "")
     message(STATUS "FDA mode    : OFF (standard: host control, preset slots at pages 110-125)")

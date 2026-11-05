@@ -33,12 +33,6 @@ static bool sequence_under_way(void)
 	return status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED;
 }
 
-// Where one preset's blob is, and how long.
-typedef struct {
-	const uint8_t *data;
-	uint32_t len;
-} PresetBlob;
-
 // Blob fields are little-endian and unaligned, so they are read a byte at a time.
 static uint16_t rd_u16(const uint8_t *p)
 {
@@ -197,7 +191,18 @@ static bool slot_blob(uint8_t slot, PresetBlob *out)
 	return true;
 }
 
-#else /* FDA_MODE */
+#elif defined(PRESET_TABLE) /* FDA_MODE, a set of presets */
+
+// The set, from the SDK's generate_preset_set: index i is its i-th preset.
+// The blobs are const data in the image, so what runs is what was flashed.
+#include "presets/preset_table.h"
+
+_Static_assert(PRESET_COUNT >= 1u && PRESET_COUNT <= PRESET_SLOTS,
+               "a linked set has 1..PRESET_SLOTS presets");
+_Static_assert(PRESET_MODULES == 1u,
+               "a presets-only image runs 1x presets: every module would need its own column");
+
+#else /* FDA_MODE, one preset */
 
 // The one preset, from the SDK. The linker puts it right after the code
 // (.fda_preset); it is read from there, so what runs is what was flashed.
@@ -224,6 +229,8 @@ uint8_t presets_slot_state(uint8_t slot)
 	bool tail;
 	if (slot_len(slot, &tail) != 0U) return OW_SUCCESS;
 	return tail ? OW_PRESET_SLOT_TAIL : OW_PRESET_EMPTY;
+#elif defined(PRESET_TABLE)
+	return OW_SUCCESS;   // every index below PRESET_COUNT is one of the set
 #else
 	PresetBlob blob;
 	return fda_blob(&blob) ? OW_SUCCESS : OW_PRESET_EMPTY;
@@ -342,6 +349,9 @@ bool presets_get(uint8_t index, Preset *out)
 	PresetBlob blob;
 #ifndef FDA_MODE
 	if (index >= PRESET_COUNT || !slot_blob(index, &blob)) return false;
+#elif defined(PRESET_TABLE)
+	if (index >= PRESET_COUNT) return false;
+	blob = preset_table[index][0];
 #else
 	if (index != 0U || !fda_blob(&blob)) return false;
 #endif
