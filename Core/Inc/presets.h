@@ -5,8 +5,8 @@
  * host picks one with OW_PRESET_LOAD.
  *
  *   FDA_MODE  a presets-only image (+fda, +test): one preset, linked into
- *             the image at the end of the application slot (pages 108-109,
- *             the FDA linker scripts' FDA_PRESET region), from
+ *             the image right after the code (the linker scripts'
+ *             .fda_preset section), so the signature covers it, from
  *             Core/Inc/presets/fda_preset.h. Flashing or updating the image
  *             writes it; nothing in the image writes it, or the user config.
  *             The host may load the preset and change nothing else: not the
