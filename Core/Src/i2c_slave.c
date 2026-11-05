@@ -174,6 +174,8 @@ static uint8_t slave_packet_type_for(uint8_t command)
 		break;
 	}
 
+	// The preset commands (0x50-0x5F) are controller commands too.
+	if ((command & 0xF0) == 0x50) return OW_CONTROLLER;
 	if ((command & 0xF0) == 0x20) return OW_TX7332;
 	if ((command & 0xF0) == 0x00) return OW_CMD;
 	return OW_ERROR;

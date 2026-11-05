@@ -80,6 +80,9 @@ void trigger_set_timeout_s(uint32_t timeout_s);
 bool trigger_timeout_expired(void);
 // After stop_sequence() on expiry: TIMEOUT until STOP, unless every train was out.
 void trigger_end_timeout(void);
+void trigger_register_interlock(void);
+// True once after the host link was lost (port closed, cable pulled).
+bool trigger_take_host_lost(void);
 bool get_trigger_data(char *jsonString, size_t max_length);
 bool set_trigger_data(const char *jsonString, size_t str_len);
 bool trigger_set_config(uint32_t frequency_hz, uint32_t pulse_width_us,

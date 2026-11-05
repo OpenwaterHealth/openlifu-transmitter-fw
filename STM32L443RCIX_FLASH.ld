@@ -51,8 +51,8 @@ MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 48K
   RAM2    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 16K
-  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = FDA_LAYOUT ? 248K : 220K /* Regular/preset: pages 0-109, below the presets and the config page. FDA: pages 0-123. */
-  FDA_PRESET (r)  : ORIGIN = 0x0803E000, LENGTH = FDA_LAYOUT ? 4K : 0 /* FDA: pages 124-125, as under the bootloader */
+  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = FDA_LAYOUT ? 216K : 220K /* Regular/preset: pages 0-109, below the presets and the config page. FDA: pages 0-107. */
+  FDA_PRESET (r)  : ORIGIN = 0x08036000, LENGTH = FDA_LAYOUT ? 4K : 0 /* FDA: pages 108-109, as under the bootloader */
 }
 
 /* Sections */
