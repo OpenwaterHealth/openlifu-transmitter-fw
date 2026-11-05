@@ -125,8 +125,9 @@ int main(int argc, char **argv)
 	check("TX7332 read open", preset_policy_fda_refusal(OW_TX7332, OW_TX7332_RREG, 0), OW_SUCCESS, OW_TX7332, OW_TX7332_RREG, 0);
 	check("ARM_PROFILE_CYCLE not a host write", preset_policy_raw_write(OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE), 0, OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE, 0);
 	// The thermal limits are the linked preset's in FDA_MODE: the host may read
-	// them only. In a standard image setting them is not a raw write: it
-	// leaves the load alone (and is refused while a preset is loaded).
+	// them only. In a standard image setting them is not in the raw-write
+	// table: they address module 0 only, and their handler unloads a loaded
+	// preset itself (if_commands.c).
 	check("GET_THERMAL_LIMITS open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0);
 	static const uint8_t limit_writes[] = { OW_CTRL_SET_THERMAL_LIMITS, OW_CTRL_CLEAR_THERMAL_LIMITS };
 	for (unsigned i = 0; i < sizeof(limit_writes); i++) {

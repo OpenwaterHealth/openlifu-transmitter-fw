@@ -10,21 +10,25 @@
  * preset (presets_raw_write()) and leaves them armed, as do an unload and a
  * refused load: only another successful load, the host's SET or CLEAR, or a
  * reset changes them. They are RAM state, so every reset starts with none.
+ * A SET or CLEAR also unloads a loaded preset, as a raw write does: the
+ * preset's limits are part of what it was checked as, so the device must not
+ * report it loaded under other limits (if_commands.c).
  *
  *   FDA_MODE  only a load arms them, and START needs a load as well
  *             (OW_NO_PRESET). SET and CLEAR are refused (preset_policy.c)
  *             and not built in.
  *   standard  the host may also SET its own limits, or CLEAR them, while no
- *             preset is loaded and no sequence runs: research use without a
- *             preset. With none armed, START runs the host's configuration
- *             with only the global TX_OVERHEAT protection.
+ *             sequence runs: research use without a preset, or a loaded
+ *             preset changed after the load. With none armed, START runs the
+ *             host's configuration with only the global TX_OVERHEAT
+ *             protection.
  *
  * Only the master runs the trigger, so the master's limits are the ones that
  * act; the commands address module 0 only. A slave keeps what its own loads
  * armed, which nothing reads.
  *
- * Pure: the caller passes in the device state (loaded, running, the reading),
- * so the logic can be tested on the host (tests/unit).
+ * Pure: the caller passes in the device state (loaded, running, the reading)
+ * and does any unload, so the logic can be tested on the host (tests/unit).
  */
 
 #ifndef INC_THERMAL_LIMITS_H_
@@ -56,20 +60,20 @@ void thermal_limits_get(ThermalLimits *out);
 #ifndef FDA_MODE
 
 /**
- * @brief  Arm the host's own limits.
+ * @brief  Arm the host's own limits, over whatever is armed. The caller
+ *         unloads a loaded preset first.
  * @return OW_SUCCESS; OW_INVALID_PACKET unless start_C is below shutoff_C;
- *         OW_PRESET_BUSY while a preset is loaded (its limits are part of
- *         what it was checked as: unload it, or load another) or a sequence
- *         runs. A refusal changes nothing.
+ *         OW_PRESET_BUSY while a sequence runs. A refusal changes nothing.
  */
-uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool preset_loaded, bool running);
+uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool running);
 
 /**
- * @brief  Disarm the limits. Nothing armed is not an error.
- * @return OW_SUCCESS, or OW_PRESET_BUSY, changing nothing, while a preset is
- *         loaded or a sequence runs.
+ * @brief  Disarm the limits. Nothing armed is not an error. The caller
+ *         unloads a loaded preset first.
+ * @return OW_SUCCESS, or OW_PRESET_BUSY, changing nothing, while a sequence
+ *         runs.
  */
-uint8_t thermal_limits_clear(bool preset_loaded, bool running);
+uint8_t thermal_limits_clear(bool running);
 
 #endif /* FDA_MODE */
 

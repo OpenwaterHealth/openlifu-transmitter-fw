@@ -69,7 +69,7 @@ typedef enum {
 	// Why a preset could not be stored or deleted (presets.h).
 	OW_PRESET_BUSY = 0xF2,       // trigger running; the presets cannot change now (also: a raw
 	                             //   write while a loaded preset runs, or setting or clearing
-	                             //   the thermal limits while a preset is loaded or runs)
+	                             //   the thermal limits while a sequence runs)
 	OW_PRESET_NO_ROOM = 0xF3,    // blob needs the next slot too, and it is taken or missing
 	OW_PRESET_SLOT_TAIL = 0xF4,  // slot holds the second half of the preset before it
 	OW_PRESET_EMPTY = 0xF5,      // nothing stored in the slot
@@ -192,7 +192,8 @@ typedef enum {
 	                                     //   shutoff_C x10 i16 (LE): 6 bytes
 	OW_CTRL_SET_THERMAL_LIMITS = 0x61,   // data = start_C x10 i16, shutoff_C x10 i16 (LE);
 	                                     //   start_C must be below shutoff_C
-	OW_CTRL_CLEAR_THERMAL_LIMITS = 0x62, // none armed afterwards
+	OW_CTRL_CLEAR_THERMAL_LIMITS = 0x62, // none armed afterwards. SET and CLEAR unload a
+	                                     //   loaded preset, as a raw write does
 } UstxThermalLimitCommands;
 
 typedef struct  {

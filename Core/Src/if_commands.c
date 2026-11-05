@@ -1437,16 +1437,22 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uint8_t result = (module_id == 0x00) ? OW_SUCCESS : OW_INVALID_PACKET;
 #ifndef FDA_MODE
 			bool running = get_trigger_status() == TRIGGER_STATUS_RUNNING;
+			// Like a raw write, SET and CLEAR unload a loaded preset, even when
+			// the handler then refuses them: the preset's limits are part of what
+			// it was checked as. Not mid-run: the run keeps its load and limits.
+			if (result == OW_SUCCESS && cmd->command != OW_CTRL_GET_THERMAL_LIMITS && !running) {
+				(void)presets_unload();
+			}
 			if (result == OW_SUCCESS && cmd->command == OW_CTRL_SET_THERMAL_LIMITS) {
 				// Payload: start_C and shutoff_C, i16 tenths of a degree C, LE.
 				result = OW_INVALID_PACKET;
 				if (cmd->data != NULL && cmd->data_len == 4U) {
 					int16_t start = (int16_t)(cmd->data[0] | ((uint16_t)cmd->data[1] << 8));
 					int16_t shutoff = (int16_t)(cmd->data[2] | ((uint16_t)cmd->data[3] << 8));
-					result = thermal_limits_set(start, shutoff, presets_loaded(), running);
+					result = thermal_limits_set(start, shutoff, running);
 				}
 			} else if (result == OW_SUCCESS && cmd->command == OW_CTRL_CLEAR_THERMAL_LIMITS) {
-				result = thermal_limits_clear(presets_loaded(), running);
+				result = thermal_limits_clear(running);
 			}
 #endif
 			if (result != OW_SUCCESS) {

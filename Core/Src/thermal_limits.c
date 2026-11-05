@@ -21,9 +21,9 @@ void thermal_limits_get(ThermalLimits *out)
 
 #ifndef FDA_MODE
 
-uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool preset_loaded, bool running)
+uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool running)
 {
-	if (preset_loaded || running) return OW_PRESET_BUSY;
+	if (running) return OW_PRESET_BUSY;
 	if (start_c_x10 >= shutoff_c_x10) return OW_INVALID_PACKET;
 	limits.source = THERMAL_LIMITS_HOST;
 	limits.preset_index = NO_PRESET_INDEX;
@@ -32,9 +32,9 @@ uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool pres
 	return OW_SUCCESS;
 }
 
-uint8_t thermal_limits_clear(bool preset_loaded, bool running)
+uint8_t thermal_limits_clear(bool running)
 {
-	if (preset_loaded || running) return OW_PRESET_BUSY;
+	if (running) return OW_PRESET_BUSY;
 	limits.source = THERMAL_LIMITS_NONE;
 	limits.preset_index = NO_PRESET_INDEX;
 	limits.start_c_x10 = 0;

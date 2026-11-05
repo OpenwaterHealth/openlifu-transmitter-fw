@@ -1,8 +1,9 @@
 """A standard image's thermal limits: their own state, apart from the load (#59).
 
 start_C and shutoff_C are armed by a load or by the host, and stay armed
-through a raw write or an unload. Armed, they gate START and end a run whether
-or not a preset is loaded. Needs a bare-metal standard image to store the
+through a raw write or an unload. A host set or clear unloads a loaded preset,
+as a raw write does. Armed, they gate START and end a run whether or not a
+preset is loaded. Needs a bare-metal standard image to store the
 preset in slot 0 (conftest.py); skipped on +fda / +test, where
 test_preset_refusals.py checks that the host cannot set or clear them.
 
@@ -119,16 +120,23 @@ def test_host_set_refusals_change_nothing(txdevice, machine_config, preset_in_sl
         assert (r.packet_type, r.reserved) == (OW_ERROR, OW_INVALID_PACKET), "the master's limits act"
     assert armed_limits(txdevice) == before
 
-    # A loaded preset's limits are part of what was checked at load.
+
+def test_host_set_or_clear_unloads_a_preset(txdevice, machine_config, preset_in_slot, host_mode):
+    # Load, then modify: the preset no longer describes what is armed.
     load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
-    preset_limits = armed_limits(txdevice)
-    for r in (set_thermal_limits(txdevice, 30.0, 35.0), clear_thermal_limits(txdevice)):
-        assert (r.packet_type, r.reserved) == (OW_ERROR, OW_PRESET_BUSY)
-    assert armed_limits(txdevice) == preset_limits
+    assert loaded(txdevice)["loaded"]
+    armed = decode_thermal_limits(set_thermal_limits(txdevice, 30.0, 35.0))
+    assert armed["source"] == "host" and armed["x10"] == (300, 350)
+    assert not loaded(txdevice)["loaded"], "a host set unloads, as a raw write does"
+
+    load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
+    assert armed_limits(txdevice)["source"] == "preset"
+    assert decode_thermal_limits(clear_thermal_limits(txdevice))["source"] == "none"
+    assert not loaded(txdevice)["loaded"], "so does a clear"
 
 
 def test_start_refused_above_start_c_with_no_preset(txdevice, host_mode):
-    _host_trigger(txdevice)
+    _host_trigger(txdevice, TriggerMode=TRIGGER_MODE_CONTINUOUS)
     temp = txdevice.get_temperature()
     # start_C a degree below the reading: refused, with no preset loaded.
     start = _tenth_above(temp, -10)
@@ -142,7 +150,12 @@ def test_start_refused_above_start_c_with_no_preset(txdevice, host_mode):
     # A start_C above the reading lets it start.
     start = _tenth_above(temp, 20)
     assert set_thermal_limits(txdevice, start, start + 20.0).packet_type != OW_ERROR
+    before = armed_limits(txdevice)
     txdevice.start_trigger()
+    # The run keeps the limits it started under.
+    for r in (set_thermal_limits(txdevice, 30.0, 35.0), clear_thermal_limits(txdevice)):
+        assert (r.packet_type, r.reserved) == (OW_ERROR, OW_PRESET_BUSY)
+    assert armed_limits(txdevice) == before
     txdevice.stop_trigger()
 
     # Cleared, nothing gates it.

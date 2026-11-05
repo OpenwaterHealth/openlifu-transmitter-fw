@@ -98,7 +98,7 @@ static void test_fda_needs_a_load(void)
 // image only ever arms, so its tests run in an order that needs no reset.
 static void reset(void)
 {
-	CHECK(thermal_limits_clear(false, false) == OW_SUCCESS);
+	CHECK(thermal_limits_clear(false) == OW_SUCCESS);
 }
 
 static void test_none_armed_runs_ungated(void)
@@ -115,21 +115,21 @@ static void test_none_armed_runs_ungated(void)
 static void test_host_set_and_clear(void)
 {
 	reset();
-	CHECK(thermal_limits_set(START_X10, SHUTOFF_X10, false, false) == OW_SUCCESS);
+	CHECK(thermal_limits_set(START_X10, SHUTOFF_X10, false) == OW_SUCCESS);
 	ThermalLimits l = armed();
 	CHECK(l.source == THERMAL_LIMITS_HOST && l.preset_index == 0xFF);
 	CHECK(l.start_c_x10 == START_X10 && l.shutoff_c_x10 == SHUTOFF_X10);
 	test_start_check_with_limits(false);
 	test_trip_with_limits();
 
-	CHECK(thermal_limits_clear(false, false) == OW_SUCCESS);
+	CHECK(thermal_limits_clear(false) == OW_SUCCESS);
 	CHECK(armed().source == THERMAL_LIMITS_NONE);
 	CHECK(thermal_limits_start_check(false, true, 100.0f) == OW_SUCCESS);
 	// Clearing with none armed is not an error.
-	CHECK(thermal_limits_clear(false, false) == OW_SUCCESS);
+	CHECK(thermal_limits_clear(false) == OW_SUCCESS);
 
 	// Negative limits are tenths too.
-	CHECK(thermal_limits_set(-50, 10, false, false) == OW_SUCCESS);
+	CHECK(thermal_limits_set(-50, 10, false) == OW_SUCCESS);
 	CHECK(thermal_limits_start_check(false, true, -5.0f) == OW_SUCCESS);
 	CHECK(thermal_limits_start_check(false, true, -4.9f) == OW_TEMP_TOO_HIGH);
 }
@@ -137,35 +137,35 @@ static void test_host_set_and_clear(void)
 static void test_host_set_refusals_change_nothing(void)
 {
 	reset();
-	CHECK(thermal_limits_set(START_X10, SHUTOFF_X10, false, false) == OW_SUCCESS);
+	CHECK(thermal_limits_set(START_X10, SHUTOFF_X10, false) == OW_SUCCESS);
 
 	// start_C must be below shutoff_C.
-	CHECK(thermal_limits_set(430, 430, false, false) == OW_INVALID_PACKET);
-	CHECK(thermal_limits_set(450, 430, false, false) == OW_INVALID_PACKET);
-	// Not mid-run, and not over a loaded preset's own limits.
-	CHECK(thermal_limits_set(300, 350, false, true) == OW_PRESET_BUSY);
-	CHECK(thermal_limits_set(300, 350, true, false) == OW_PRESET_BUSY);
-	CHECK(thermal_limits_clear(false, true) == OW_PRESET_BUSY);
-	CHECK(thermal_limits_clear(true, false) == OW_PRESET_BUSY);
+	CHECK(thermal_limits_set(430, 430, false) == OW_INVALID_PACKET);
+	CHECK(thermal_limits_set(450, 430, false) == OW_INVALID_PACKET);
+	// Not mid-run: the run keeps the limits it started under.
+	CHECK(thermal_limits_set(300, 350, true) == OW_PRESET_BUSY);
+	CHECK(thermal_limits_clear(true) == OW_PRESET_BUSY);
 
 	ThermalLimits l = armed();
 	CHECK(l.source == THERMAL_LIMITS_HOST);
 	CHECK(l.start_c_x10 == START_X10 && l.shutoff_c_x10 == SHUTOFF_X10);
 }
 
-static void test_preset_limits_need_an_unload_to_change(void)
+static void test_host_replaces_a_presets_limits(void)
 {
 	reset();
+	// Load, then modify: the handler unloads the preset, then sets.
 	thermal_limits_arm_preset(0, START_X10, SHUTOFF_X10);
-	CHECK(thermal_limits_set(300, 350, true, false) == OW_PRESET_BUSY);
-	CHECK(thermal_limits_clear(true, false) == OW_PRESET_BUSY);
-	CHECK(armed().source == THERMAL_LIMITS_PRESET);
-	// Once unloaded (a raw write, or OW_PRESET_LOAD with no payload), the host may.
-	CHECK(thermal_limits_set(300, 350, false, false) == OW_SUCCESS);
-	CHECK(armed().source == THERMAL_LIMITS_HOST);
-	// And a load arms the preset's over the host's.
+	CHECK(thermal_limits_set(300, 350, false) == OW_SUCCESS);
+	ThermalLimits l = armed();
+	CHECK(l.source == THERMAL_LIMITS_HOST && l.preset_index == 0xFF);
+	CHECK(l.start_c_x10 == 300 && l.shutoff_c_x10 == 350);
+	// A load arms the preset's over the host's.
 	thermal_limits_arm_preset(1, START_X10, SHUTOFF_X10);
 	CHECK(armed().source == THERMAL_LIMITS_PRESET && armed().preset_index == 1);
+	// And CLEAR disarms a preset's.
+	CHECK(thermal_limits_clear(false) == OW_SUCCESS);
+	CHECK(armed().source == THERMAL_LIMITS_NONE);
 }
 
 #endif /* FDA_MODE */
@@ -183,7 +183,7 @@ int main(void)
 	test_load_arms_and_outlasts_the_load();
 	test_host_set_and_clear();
 	test_host_set_refusals_change_nothing();
-	test_preset_limits_need_an_unload_to_change();
+	test_host_replaces_a_presets_limits();
 #endif
 	printf("%s build: thermal limits, %d failure(s)\n", build, failures);
 	return failures ? 1 : 0;
