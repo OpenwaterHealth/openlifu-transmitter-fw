@@ -88,17 +88,16 @@ def test_raw_write_while_a_preset_runs_is_busy(txdevice, machine_config, preset_
         txdevice.stop_trigger()
 
 
-def test_a_raw_write_on_one_module_reads_as_nothing_loaded(
-    txdevice, machine_config, preset_in_slot
+@pytest.mark.parametrize("chip", [0, 2], ids=["master", "module1"])
+def test_a_raw_write_on_one_module_unloads_every_module(
+    txdevice, machine_config, preset_in_slot, chip
 ):
     if txdevice.get_module_count() < 2:
         pytest.skip("needs two modules")
     load_preset(txdevice, PRESET_INDEX, machine_config, duration_index=0)
     assert loaded(txdevice)["loaded"]
 
-    # Read a register on module 1's first chip and write the same value back:
-    # module 1 runs the write and unloads, the master only forwards it.
-    chip = 2
+    # Read a register on one module's first chip and write the same value back.
     r = send_raw(txdevice, OW_TX7332, OW_TX7332_RREG, addr=chip, data=bytearray(b"\x00\x00"))
     assert r is not None and r.packet_type != OW_ERROR
     value = bytes(r.data[:4])
@@ -108,8 +107,15 @@ def test_a_raw_write_on_one_module_reads_as_nothing_loaded(
     assert w is not None and w.packet_type != OW_ERROR
 
     state = loaded(txdevice)
-    assert not state["loaded"], "one module without the load reads as nothing loaded"
-    assert state["missing"] == 0b10, "module 1 unloaded itself; the master still holds the load"
+    assert not state["loaded"]
+    every = (1 << txdevice.get_module_count()) - 1
+    assert state["missing"] == every
+    for module in range(txdevice.get_module_count()):
+        assert not loaded(txdevice, module)["loaded"], f"module {module} still holds the load"
+    # And the START gate agrees: with nothing loaded the host's own config
+    # starts, on the timing the preset left (presets.h).
+    txdevice.start_trigger()
+    txdevice.stop_trigger()
 
 
 def test_there_is_no_lock_command(txdevice, standard):

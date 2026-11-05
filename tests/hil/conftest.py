@@ -69,9 +69,9 @@ def send_raw(txdevice, packet_type, command, addr=0, reserved=0, data=None):
     )
 
 
-def loaded(txdevice) -> dict:
-    """OW_PRESET_LOADED, decoded."""
-    r = send_raw(txdevice, OW_CONTROLLER, OW_PRESET_LOADED)
+def loaded(txdevice, module: int = 0) -> dict:
+    """OW_PRESET_LOADED, decoded: the whole device's (module 0), or one module's own."""
+    r = send_raw(txdevice, OW_CONTROLLER, OW_PRESET_LOADED, addr=module)
     assert r is not None and r.packet_type != OW_ERROR and r.data_len == 16
     d = bytes(r.data)
     train_count, settings_crc, regs_crc = struct.unpack("<III", d[3:15])

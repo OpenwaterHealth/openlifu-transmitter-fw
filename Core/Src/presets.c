@@ -428,7 +428,8 @@ static bool find_apodization(const uint8_t *p, uint32_t *value)
 bool presets_unload(void)
 {
 	// What a running sequence was loaded with stays: the thermal shutoff is
-	// watching its limits.
+	// watching its limits. Only the loaded state goes; the chips, profile
+	// cycle and trigger timing it programmed stay.
 	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
 	preset_loaded = false;
 	return true;
@@ -489,8 +490,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	}
 
 	// The preset owns its sequence timing and its run-length choices: an
-	// FDA_MODE image refuses SET_SWTRIG, and a standard one unloads the
-	// preset on it (it would also clear the profile cycle installed above).
+	// FDA_MODE image refuses SET_SWTRIG. A standard one takes it, which
+	// unloads the preset, and SET_SWTRIG itself clears the profile cycle
+	// installed above.
 	uint32_t trains = presets_train_count(&preset, (uint8_t)duration_index);
 	if (!trigger_set_config(preset.trig_frequency_hz,
 	                        PRESET_TRIGGER_PULSE_WIDTH_US,
@@ -517,12 +519,12 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	return true;
 }
 
-bool presets_raw_write(bool here)
+bool presets_raw_write(void)
 {
 	// A raw write while nothing is loaded is the research case: let it be.
 	if (!preset_loaded) return true;
 	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
-	if (here) preset_loaded = false;
+	preset_loaded = false;
 	return true;
 }
 

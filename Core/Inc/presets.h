@@ -17,15 +17,20 @@
  *             index N. A blob longer than a page runs on into the next slot,
  *             which then has no preset of its own. The host also keeps the
  *             registers and the trigger: a raw register, profile or trigger
- *             write leaves nothing loaded on the module that runs it, and is
- *             refused (OW_PRESET_BUSY) while a loaded preset runs.
+ *             write unloads the preset, and is refused (OW_PRESET_BUSY) while
+ *             a loaded preset runs.
  *
- * Each module keeps its own load: a raw write to one module's chips unloads
- * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
- * every module on the same preset is the host's job; configuring modules
- * differently is a research use of the low-level commands. A raw write the
- * handler then rejects has still unloaded: a preset counts as loaded only on
- * the happy path.
+ * A raw write unloads every module, not only the one whose chips it changes:
+ * the master unloads itself and tells every other module to unload, so
+ * OW_PRESET_LOADED and the START gate agree. A raw write the handler then
+ * rejects has still unloaded: a preset counts as loaded only on the happy
+ * path.
+ *
+ * Unloading clears the loaded state, and with it the start_C / shutoff_C
+ * gating, and nothing else. The chips, the profile cycle and the trigger
+ * timing stay as the preset left them, plus whatever the raw write changed,
+ * and a START with nothing loaded runs them as they stand. (SET_SWTRIG itself
+ * clears the profile cycle, as it does with or without a preset.)
  *
  * Only a bare-metal standard image stores presets (PRESET_STORE). Under the
  * bootloader, pages 110-125 are the end of its slot, which it checks are
@@ -198,7 +203,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
                   uint32_t expected_settings_crc);
 
 /**
- * @brief  Leave nothing loaded, so the trigger refuses to start.
+ * @brief  Leave nothing loaded: START is no longer held to the preset's
+ *         start_C / shutoff_C (an FDA_MODE image then refuses to start).
+ *         The chips, profile cycle and trigger timing are left as they are.
  *
  * What the host asks for when the console did not take the same preset.
  *
@@ -208,16 +215,16 @@ bool presets_unload(void);
 
 /**
  * @brief  A standard image's host write is about to change the registers,
- *         profiles or trigger (preset_policy_raw_write()) of this module (here) or of
- *         another one it is forwarded to. Here, leave nothing loaded, since
- *         the loaded preset no longer describes the chips; elsewhere, that
- *         module unloads itself when it runs the write.
+ *         profiles or trigger (preset_policy_raw_write()) of some module:
+ *         leave nothing loaded here, since the loaded preset no longer
+ *         describes the device. The master also unloads every other module
+ *         (if_commands.c).
  * @return false, changing nothing, if a loaded preset is running here: the
  *         write would change it mid-burst and is refused. Only the master
  *         runs the trigger, so a module never refuses (#57). With nothing
  *         loaded, always true.
  */
-bool presets_raw_write(bool here);
+bool presets_raw_write(void);
 
 /** Is a preset loaded on this module? */
 bool presets_loaded(void);

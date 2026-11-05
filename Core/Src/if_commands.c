@@ -626,7 +626,7 @@ static uint32_t get_u32(const uint8_t *p)
 }
 
 // A module answers for itself. The master also asks every other module, so a
-// raw write that unloaded any one of them reads as nothing loaded. Each
+// module that missed a load, or its unload, reads as nothing loaded. Each
 // module checks its own regs_crc at load, so they are compared on what they
 // share: index, run length and settings_crc.
 static uint16_t preset_loaded_reply(const UartPacket *cmd, uint8_t *reply)
@@ -668,6 +668,35 @@ static uint16_t preset_loaded_reply(const UartPacket *cmd, uint8_t *reply)
 	reply[15] = missing;
 	return PRESET_LOADED_REPLY_LEN;
 }
+
+#ifndef FDA_MODE
+// Master only: might a module other than the master still hold a load? Set
+// when a load is forwarded (and at boot, not knowing), cleared once every
+// module has unloaded, so a run of raw writes costs one round of unloads.
+static bool modules_may_be_loaded = true;
+
+// Unload every module but the master, which unloads itself. A module that
+// cannot be reached stays marked, and is asked again at the next raw write;
+// the master holds nothing either way, so OW_PRESET_LOADED and START agree.
+static void unload_other_modules(void)
+{
+	if (!modules_may_be_loaded) return;
+
+	UartPacket fwd;
+	UartPacket fwd_resp;
+	bool all = true;
+	for (uint8_t m = 1; m < get_module_count(); m++) {
+		memset(&fwd, 0, sizeof(fwd));
+		memset(&fwd_resp, 0, sizeof(fwd_resp));
+		fwd.packet_type = OW_CONTROLLER;
+		fwd.command = OW_PRESET_LOAD;   // no payload: unload
+		fwd.addr = m;
+		process_i2c_forward(&fwd_resp, &fwd, m);
+		if (fwd_resp.packet_type == OW_ERROR) all = false;
+	}
+	modules_may_be_loaded = !all;
+}
+#endif
 
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 {
@@ -1413,6 +1442,9 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 					return;
 				}
 			} else {
+#ifndef FDA_MODE
+				modules_may_be_loaded = true;
+#endif
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
@@ -1802,31 +1834,20 @@ static void TX7332_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 	}
 }
 
-#ifndef FDA_MODE
-// Does this module run a raw write itself, rather than only forwarding it?
-// TX7332 packets address a chip, the rest a module. SET_SWTRIG on module 0
-// runs here and is also sent on to every other module, which unload there.
-static bool raw_write_runs_here(const UartPacket *cmd)
-{
-	if (cmd->packet_type == OW_TX7332) return ModuleManager_GetModuleIndex(cmd->addr) == 0U;
-	return cmd->addr == 0U;
-}
-#endif
-
 // Checked before any handler or i2c forward. A presets-only image (FDA_MODE)
 // refuses whatever would change what its preset runs or what the device holds
 // (preset_policy.c). A standard image lets a raw register, profile or trigger
-// write through and leaves nothing loaded -- unless a loaded preset is
-// running, which the write would change mid-burst.
+// write through and leaves nothing loaded on any module -- unless a loaded
+// preset is running, which the write would change mid-burst.
 // Returns OW_SUCCESS, or the code to refuse the command with.
 static uint8_t preset_gate(const UartPacket *cmd)
 {
 #ifdef FDA_MODE
 	return preset_policy_fda_refusal(cmd->packet_type, cmd->command, cmd->reserved);
 #else
-	if (preset_policy_raw_write(cmd->packet_type, cmd->command) &&
-	    !presets_raw_write(raw_write_runs_here(cmd))) {
-		return OW_PRESET_BUSY;
+	if (preset_policy_raw_write(cmd->packet_type, cmd->command)) {
+		if (!presets_raw_write()) return OW_PRESET_BUSY;
+		if (get_device_role() == ROLE_MASTER) unload_other_modules();
 	}
 	return OW_SUCCESS;
 #endif
