@@ -650,6 +650,12 @@ int main(void)
     {
       if (get_device_role() == ROLE_MASTER)
       {
+        // The host is gone: stop before the next command, in the same context
+        // as START and RESUME, so neither can undo it.
+        if (trigger_take_host_lost())
+        {
+          (void)stop_sequence();
+        }
         comms_host_check_received(); // check comms
       }
       else
@@ -716,6 +722,15 @@ int main(void)
       if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
       {
         (void)stop_sequence();
+      }
+
+      // The treatment timeout ends a running or paused sequence. The preset
+      // goes with it, so only a STOP and a fresh load can start another.
+      if (trigger_timeout_expired())
+      {
+        (void)stop_sequence();
+        (void)presets_unload();
+        trigger_end_timeout();
       }
     }
   }

@@ -5,7 +5,7 @@
  * host picks one with OW_PRESET_LOAD.
  *
  *   FDA_MODE  a presets-only image (+fda, +test): one preset, linked into
- *             the image at the end of the application slot (pages 124-125,
+ *             the image at the end of the application slot (pages 108-109,
  *             the FDA linker scripts' FDA_PRESET region), from
  *             Core/Inc/presets/fda_preset.h. Flashing or updating the image
  *             writes it; nothing in the image writes it, or the user config.
@@ -18,7 +18,8 @@
  *             which then has no preset of its own. The host also keeps the
  *             registers and the trigger: a raw register, profile or trigger
  *             write leaves nothing loaded on the module that runs it, and is
- *             refused (OW_PRESET_BUSY) while a loaded preset runs.
+ *             refused (OW_PRESET_BUSY) while a loaded preset runs or is
+ *             paused.
  *
  * Each module keeps its own load: a raw write to one module's chips unloads
  * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
@@ -41,11 +42,13 @@
  *   regs_crc      over the blob's body, everything the firmware executes from
  *
  * A load also arms the preset's start_C and shutoff_C (thermal_limits.h): the
- * trigger will not start above start_C (or without a fresh reading), and a
- * running sequence stops at shutoff_C. The limits outlast the load: a raw
- * write or an unload leaves them armed. With nothing loaded, an FDA_MODE
- * image's trigger does not start; a standard image's runs on the host's own
- * configuration, under whatever limits are armed.
+ * trigger will not start above start_C (or without a fresh reading), a
+ * running sequence stops at shutoff_C, and a paused one will not resume at
+ * it. The limits outlast the load: a raw write, an unload or a timeout leaves
+ * them armed. A sequence ends as TIMEOUT once the loaded preset's
+ * treatment_timeout_s has passed since START. With nothing loaded, an
+ * FDA_MODE image's trigger does not start; a standard image's runs on the
+ * host's own configuration, under whatever limits are armed.
  *
  * A stored upload is staged in RAM and written only once all of it has
  * arrived and checks out; its magic is programmed last, so a write cut short
@@ -91,13 +94,16 @@
  *     u32 trig_frequency_hz, u32 trig_pulse_count, u32 trig_train_interval_us
  *     u8  train_count_len, u32 train_counts[train_count_len]
  *     i16 start_c_x10, i16 shutoff_c_x10
+ *     u16 treatment_timeout_s  total time from START, pauses included, after
+ *                            which the run ends as TIMEOUT (SR-024); >= 1
  *     per chip:
  *       the base registers, as runs of consecutive addresses:
  *         u16 run_count, then per run: u16 start_addr, u16 n, u32 value[n]
  *       per profile, the registers each profile switch rewrites:
  *         u16 count, then per register: u16 addr, u32 value
  */
-#define PRESET_BLOB_VERSION 1u
+// 2 added treatment_timeout_s; a version 1 blob is refused, not defaulted.
+#define PRESET_BLOB_VERSION 2u
 
 #define PRESET_SLOTS       16u
 #define PRESET_SLOT_SIZE   2048u                       // one flash page
@@ -135,6 +141,8 @@ typedef struct {
 	// TX thermistor limits, tenths of a degree C (start_C / shutoff_C).
 	int16_t start_c_x10;
 	int16_t shutoff_c_x10;
+	// Treatment timeout, seconds from START (treatment_timeout_s).
+	uint16_t treatment_timeout_s;
 	uint32_t settings_crc;             // CRC-32 of the source .json bytes
 	uint32_t regs_crc;                 // CRC-32 of the body, as generated
 	const uint8_t *body;               // what regs_crc covers
@@ -187,14 +195,15 @@ uint32_t presets_regs_crc(const Preset *preset);
  * execution order so the trigger ISRs can cycle profiles, applies the
  * preset's trigger timing, and activates its starting profile.
  *
- * A refusal leaves nothing loaded, except while a trigger is running, when
- * the load in use is left as it is.
+ * A refusal leaves nothing loaded, except while a sequence is running or
+ * paused, when the load in use is left as it is.
  *
  * @param duration_index        which of the preset's train_counts to run.
  * @param expected_regs_crc     the regs_crc the host computed for this preset.
  * @param expected_settings_crc the CRC-32 of the host's preset file.
  * @return true on success; false on a bad index, a duration index the
- *         preset does not offer, a CRC mismatch, or if a trigger is running.
+ *         preset does not offer, a CRC mismatch, or if a sequence is running or
+ *         paused.
  */
 bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs_crc,
                   uint32_t expected_settings_crc);
@@ -205,7 +214,7 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
  * What the host asks for when the console did not take the same preset. The
  * thermal limits the load armed stay armed.
  *
- * @return false, changing nothing, if a trigger is running.
+ * @return false, changing nothing, if a sequence is running or paused.
  */
 bool presets_unload(void);
 
@@ -215,8 +224,8 @@ bool presets_unload(void);
  *         another one it is forwarded to. Here, leave nothing loaded, since
  *         the loaded preset no longer describes the chips; elsewhere, that
  *         module unloads itself when it runs the write.
- * @return false, changing nothing, if a loaded preset is running here: the
- *         write would change it mid-burst and is refused. Only the master
+ * @return false, changing nothing, if a loaded preset is running or paused
+ *         here: the write would change it mid-sequence and is refused. Only the master
  *         runs the trigger, so a module never refuses (#57). With nothing
  *         loaded, always true.
  */

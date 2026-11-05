@@ -63,7 +63,8 @@ void thermal_limits_get(ThermalLimits *out);
  * @brief  Arm the host's own limits, over whatever is armed. The caller
  *         unloads a loaded preset first.
  * @return OW_SUCCESS; OW_INVALID_PACKET unless start_C is below shutoff_C;
- *         OW_PRESET_BUSY while a sequence runs. A refusal changes nothing.
+ *         OW_PRESET_BUSY while a sequence runs or is paused (running). A
+ *         refusal changes nothing.
  */
 uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool running);
 
@@ -71,7 +72,7 @@ uint8_t thermal_limits_set(int16_t start_c_x10, int16_t shutoff_c_x10, bool runn
  * @brief  Disarm the limits. Nothing armed is not an error. The caller
  *         unloads a loaded preset first.
  * @return OW_SUCCESS, or OW_PRESET_BUSY, changing nothing, while a sequence
- *         runs.
+ *         runs or is paused (running).
  */
 uint8_t thermal_limits_clear(bool running);
 

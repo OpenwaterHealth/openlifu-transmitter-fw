@@ -670,6 +670,73 @@ static uint16_t preset_loaded_reply(const UartPacket *cmd, uint8_t *reply)
 	return PRESET_LOADED_REPLY_LEN;
 }
 
+// START_SWTRIG, and RESUME_SWTRIG on a paused sequence: either way the next
+// train starts from the first profile with the slaves armed before its first edge.
+static void start_sequence(UartPacket *uartResp, bool resume)
+{
+	// The armed start_C decides a START, whether or not a preset is still
+	// loaded; checked before anything is armed, so a refusal leaves no state
+	// to unwind. In FDA_MODE a preset must be loaded; a standard image with
+	// no limits armed runs the host's own configuration. A RESUME is held to
+	// shutoff_C instead, by its caller (SR-023).
+	if (!resume) {
+		static char reason[64];
+		uint8_t refused = presets_start_check();
+		if (refused != OW_SUCCESS) {
+			uartResp->reserved = refused;
+			uartResp->data_len = presets_start_refusal(refused, reason, sizeof(reason));
+			uartResp->data = (uint8_t *)reason;
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+	}
+
+	// Check if auto-cycle should be enabled
+	if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
+		// Validate: pulse_count must be divisible by number of profiles
+		uint32_t pulses_per_profile = 0;
+		if (!trigger_pulses_per_profile(profile_cycle.exec_order_len, &pulses_per_profile)) {
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+
+		// Apply the first profile immediately before starting
+		profile_cycle.current_exec_index = 0;
+		if (!apply_next_profile_in_cycle()) {
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+
+		// Arm the slaves before the first trigger edge goes out.
+		if (!set_slave_profile_cycles(true)) {
+			(void)set_slave_profile_cycles(false);
+			uartResp->packet_type = OW_ERROR;
+			return;
+		}
+
+		// Start pulse-level auto-cycle
+		if (!tx_overheat_flag) {
+			auto_cycle_start(pulses_per_profile);
+			bool started = resume ? resume_trigger_pulse()
+			                      : start_trigger_pulse() == TRIGGER_STATUS_RUNNING;
+			if (!started) {
+				uartResp->packet_type = OW_ERROR;
+				auto_cycle_stop();
+				(void)set_slave_profile_cycles(false);
+			}
+		}
+	} else {
+		// Normal mode: single trigger sequence
+		if (!tx_overheat_flag) {
+			bool started = resume ? resume_trigger_pulse()
+			                      : start_trigger_pulse() == TRIGGER_STATUS_RUNNING;
+			if (!started) {
+				uartResp->packet_type = OW_ERROR;
+			}
+		}
+	}
+}
+
 static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 {
 	uint8_t module_id = 0;
@@ -772,58 +839,49 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->reserved = cmd->reserved;
 			uartResp->data_len = 0;
 
-			// The armed start_C decides, whether or not a preset is still
-			// loaded; checked before anything is armed, so a refusal leaves no
-			// state to unwind. In FDA_MODE a preset must be loaded; a standard
-			// image with no limits armed runs the host's own configuration.
-			uint8_t refused = presets_start_check();
-			if (refused != OW_SUCCESS) {
-				static char reason[64];
-				uartResp->reserved = refused;
-				uartResp->data_len = presets_start_refusal(refused, reason, sizeof(reason));
-				uartResp->data = (uint8_t *)reason;
+			// Paused: resume it or stop it; starting over is a STOP first.
+			if (get_trigger_status() == TRIGGER_STATUS_PAUSED) {
 				uartResp->packet_type = OW_ERROR;
 				break;
 			}
-
-			// Check if auto-cycle should be enabled
-			if (profile_cycle.is_configured && profile_cycle.exec_order_len > 0) {
-				// Validate: pulse_count must be divisible by number of profiles
-				uint32_t pulses_per_profile = 0;
-				if (!trigger_pulses_per_profile(profile_cycle.exec_order_len, &pulses_per_profile)) {
-					uartResp->packet_type = OW_ERROR;
-					break;
-				}
-
-				// Apply the first profile immediately before starting
-				profile_cycle.current_exec_index = 0;
-				if (!apply_next_profile_in_cycle()) {
-					uartResp->packet_type = OW_ERROR;
-					break;
-				}
-
-				// Arm the slaves before the first trigger edge goes out.
-				if (!set_slave_profile_cycles(true)) {
-					(void)set_slave_profile_cycles(false);
-					uartResp->packet_type = OW_ERROR;
-					break;
-				}
-
-				// Start pulse-level auto-cycle
-				if (!tx_overheat_flag) {
-					auto_cycle_start(pulses_per_profile);
-					if (start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
-						uartResp->packet_type = OW_ERROR;
-						auto_cycle_stop();
-						(void)set_slave_profile_cycles(false);
-					}
-				}
-			} else {
-				// Normal mode: single trigger sequence
-				if(!tx_overheat_flag && start_trigger_pulse() != TRIGGER_STATUS_RUNNING) {
-					uartResp->packet_type = OW_ERROR;
-				}
+			start_sequence(uartResp, false);
+			break;
+		case OW_CTRL_PAUSE_SWTRIG:
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			// GET_SWTRIG shows when it lands: RUNNING until then, or
+			// STOPPED if the final train ran out instead.
+			if (!pause_trigger_pulse()) {
+				uartResp->packet_type = OW_ERROR;
 			}
+			break;
+		case OW_CTRL_RESUME_SWTRIG:
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			// Not landed yet: withdraw the pause, the run never stopped.
+			if (get_trigger_status() == TRIGGER_STATUS_RUNNING) {
+				if (!resume_trigger_pulse()) {
+					uartResp->packet_type = OW_ERROR;
+				}
+				break;
+			}
+			// Refused while hot, unlike START: the pause stays for a later resume.
+			// After a timeout the status is TIMEOUT, so that is refused here too.
+			if (get_trigger_status() != TRIGGER_STATUS_PAUSED || tx_overheat_flag) {
+				uartResp->packet_type = OW_ERROR;
+				break;
+			}
+			// The preset's shutoff_C, or no fresh reading, as a running sequence
+			// would be stopped by; start_C does not apply to a resume (SR-023).
+			if (presets_thermal_trip()) {
+				uartResp->packet_type = OW_ERROR;
+				break;
+			}
+			start_sequence(uartResp, true);
 			break;
 		case OW_CTRL_STOP_SWTRIG:
 			uartResp->command = cmd->command;
@@ -1436,10 +1494,12 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->data_len = 0;
 			uint8_t result = (module_id == 0x00) ? OW_SUCCESS : OW_INVALID_PACKET;
 #ifndef FDA_MODE
-			bool running = get_trigger_status() == TRIGGER_STATUS_RUNNING;
+			uint8_t status = get_trigger_status();
+			bool running = status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED;
 			// Like a raw write, SET and CLEAR unload a loaded preset, even when
 			// the handler then refuses them: the preset's limits are part of what
-			// it was checked as. Not mid-run: the run keeps its load and limits.
+			// it was checked as. Not while a sequence runs or is paused: it keeps its
+			// load and limits, and resumes on them.
 			if (result == OW_SUCCESS && cmd->command != OW_CTRL_GET_THERMAL_LIMITS && !running) {
 				(void)presets_unload();
 			}

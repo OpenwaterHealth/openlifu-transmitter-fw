@@ -25,6 +25,14 @@ static bool preset_loaded = false;
 // and storing over its slot unloads it.
 static PresetLoaded loaded;
 
+// A sequence is under way, running or paused to resume on what it was loaded
+// with: the presets, and the registers they set, cannot change now.
+static bool sequence_under_way(void)
+{
+	uint8_t status = get_trigger_status();
+	return status == TRIGGER_STATUS_RUNNING || status == TRIGGER_STATUS_PAUSED;
+}
+
 // Where one preset's blob is, and how long.
 typedef struct {
 	const uint8_t *data;
@@ -116,9 +124,11 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	if (out->train_count_len < 1U) return false;
 	if (!take(&c, 4U * (uint32_t)out->train_count_len, &out->train_counts)) return false;
 
-	if (!take(&c, 4U, &f)) return false;
+	if (!take(&c, 6U, &f)) return false;
 	out->start_c_x10 = (int16_t)rd_u16(&f[0]);
 	out->shutoff_c_x10 = (int16_t)rd_u16(&f[2]);
+	out->treatment_timeout_s = rd_u16(&f[4]);
+	if (out->treatment_timeout_s < 1U) return false;
 
 	out->chips = c.p;
 	for (uint8_t chip = 0; chip < out->chip_count; chip++) {
@@ -286,8 +296,9 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
 	uint8_t next = (uint8_t)(slot + 1U);
 	if (new_slots > old_slots && (next >= PRESET_SLOTS || header_len(next) != 0U)) return OW_PRESET_NO_ROOM;
 
-	// A flash erase stalls the core for milliseconds, trigger ISRs included.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	// A flash erase stalls the core for milliseconds, trigger ISRs included,
+	// and storing over the loaded slot would unload a paused sequence.
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	// Erase whatever the old blob held as well, so a shorter one frees its second slot.
 	uint8_t span = (new_slots > old_slots) ? new_slots : old_slots;
@@ -311,7 +322,7 @@ uint8_t presets_delete(uint8_t slot)
 	uint32_t len = slot_len(slot, &tail);
 	if (tail) return OW_PRESET_SLOT_TAIL;
 	if (len == 0U) return OW_SUCCESS;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return OW_PRESET_BUSY;
+	if (sequence_under_way()) return OW_PRESET_BUSY;
 
 	uint32_t base = slot_address(slot);
 	slots_changing(slot, slots_for(len));
@@ -425,8 +436,9 @@ static bool find_apodization(const uint8_t *p, uint32_t *value)
 
 bool presets_unload(void)
 {
-	// A running sequence keeps what it was loaded with.
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	// What a running sequence was loaded with stays: the thermal shutoff is
+	// watching its limits. A paused one resumes on them.
+	if (sequence_under_way()) return false;
 	preset_loaded = false;
 	return true;
 }
@@ -437,7 +449,9 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 	// Rewriting the delay and pattern registers underneath a running sequence
 	// would change the output mid-burst. Otherwise any refusal, or a load that
 	// fails part way, leaves nothing loaded, so the trigger cannot start on an
-	// earlier load the host no longer matches.
+	// earlier load the host no longer matches. A timed-out sequence is ended
+	// with STOP first, as the SDK does, so the load cannot hide the TIMEOUT.
+	if (get_trigger_status() == TRIGGER_STATUS_TIMEOUT) return false;
 	if (!presets_unload()) return false;
 
 	Preset preset;
@@ -498,6 +512,8 @@ bool presets_load(uint8_t index, uint32_t duration_index, uint32_t expected_regs
 		return false;
 	}
 
+	trigger_set_timeout_s(preset.treatment_timeout_s);
+
 	// Make the starting profile active so the first trigger uses it.
 	for (uint8_t c = 0; c < chips; c++) {
 		TX7332_SetActiveDelayProfile(preset.profile_index, &transmitters[c], c);
@@ -517,7 +533,7 @@ bool presets_raw_write(bool here)
 {
 	// A raw write while nothing is loaded is the research case: let it be.
 	if (!preset_loaded) return true;
-	if (get_trigger_status() == TRIGGER_STATUS_RUNNING) return false;
+	if (sequence_under_way()) return false;
 	if (here) preset_loaded = false;
 	return true;
 }
