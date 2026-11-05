@@ -650,6 +650,12 @@ int main(void)
     {
       if (get_device_role() == ROLE_MASTER)
       {
+        // The host is gone: stop before the next command, in the same context
+        // as START and RESUME, so neither can undo it.
+        if (trigger_take_host_lost())
+        {
+          (void)stop_sequence();
+        }
         comms_host_check_received(); // check comms
       }
       else
@@ -712,13 +718,11 @@ int main(void)
         }
       }
 
-#ifdef PRESETS_ENABLED
       // The loaded preset's shutoff_C, or a thermistor gone quiet, ends a run.
       if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_thermal_trip())
       {
         (void)stop_sequence();
       }
-#endif
 
       // A pause not resumed in time ends the sequence; resume is refused after.
       if (trigger_pause_expired())

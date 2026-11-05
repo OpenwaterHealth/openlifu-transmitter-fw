@@ -2,7 +2,7 @@
 
     python flash.py                                    # flash the existing Debug-BareMetal image
     python flash.py --build                            # bump the build number, rebuild, then flash
-    python flash.py --preset Release-Preset-BareMetal --build
+    python flash.py --preset Release-FDA-BareMetal --build
     python flash.py --build --no-increment             # rebuild without bumping the counter
     python flash.py --list-probes                      # enumerate probes, flash nothing
 
