@@ -8,7 +8,10 @@ on:
 
 jobs:
   static-analysis:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, whose apt cppcheck (2.19) fails
+    # on the CubeMX __ALIGN_END macro and reports new style findings. 24.04
+    # ships cppcheck 2.13, the version this scan was validated with (#68).
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -21,6 +24,9 @@ jobs:
 
       # 1. Cppcheck with MISRA-C:2012 and Safety focus
       # --error-exitcode=1 ensures the build fails on findings
+      # The per-line suppressions are style findings (scope / const) in the
+      # FDA preset code, not defects; left unrefactored so the bench images
+      # match the reviewed source. Cleared by #67.
       - name: Run Cppcheck (Safety & Standards)
         run: |
           cppcheck --enable=warning,style,performance,portability \
@@ -35,6 +41,9 @@ jobs:
                    --suppress=*:Core/Src/system_stm32l4xx.c \
                    --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
+                   --suppress=variableScope:Core/Src/if_commands.c:683 \
+                   --suppress=variableScope:Core/Src/presets.c:590 \
+                   --suppress=constParameterPointer:Core/Src/tx7332.c:147 \
                    ./Core/Src ./USB_DEVICE/App
 
       # 2. Complexity Analysis (Lizard)

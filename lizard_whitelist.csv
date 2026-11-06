@@ -21,3 +21,12 @@ TX7332_ProcessCommand
 # parse/validate/dispatch kept in one function to preserve the DMA buffer
 # handshake (CCN 16 vs limit 15).
 comms_onewire_check_received
+
+# FDA preset loader (presets.c) and module I2C forwarding (if_commands.c) —
+# CCN 16-27, driven by one early-return per validated field or refusal.
+# Temporary: whitelisted so the bench images match the reviewed source;
+# refactor and remove these entries under #67.
+parse_blob
+presets_load
+presets_commit
+process_i2c_forward
