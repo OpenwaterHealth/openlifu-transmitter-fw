@@ -1,0 +1,6 @@
+# Probot DCO configuration. The app reads this file from the default
+# branch only. Remediation commits let a contributor sign off earlier
+# commits with one empty signed commit, so branches pinned by SHA in the
+# diathermy repo never need a rebase or force-push.
+allowRemediationCommits:
+  individual: true

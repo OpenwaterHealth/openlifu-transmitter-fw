@@ -8,7 +8,10 @@ on:
 
 jobs:
   static-analysis:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, whose apt cppcheck (2.19) fails
+    # on the CubeMX __ALIGN_END macro and reports new style findings. 24.04
+    # ships cppcheck 2.13, the version this scan was validated with (#68).
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
