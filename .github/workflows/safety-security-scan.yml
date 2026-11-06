@@ -29,6 +29,8 @@ jobs:
                    --force \
                    --inline-suppr \
                    --template="[{severity}] {file}:{line} {id} - {message}" \
+                   -I USB_DEVICE/Target \
+                   -I Middlewares/ST/STM32_USB_Device_Library/Core/Inc \
                    --suppress=missingIncludeSystem \
                    --suppress=*:Core/Src/lwrb.c \
                    --suppress=*:Core/Src/jsmn.c \
