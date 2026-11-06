@@ -22,8 +22,20 @@
 
 bool process_if_command(UartPacket *cmd, UartPacket *resp);
 
+// Everything OW_CTRL_STOP_SWTRIG stops: the trigger, profile auto-cycle and the
+// slaves' armed cycles. Also how a thermal trip ends a run from the main loop.
+uint8_t stop_sequence(void);
+
 // Profile auto-cycle hooks, called from the trigger ISRs in trigger.c.
 bool apply_next_profile_in_cycle(void);
 void reset_profile_cycle_to_start(void);
+
+// Loading a preset (presets.c): install an execution order that was computed at build
+// time, instead of the one the host used to push with OW_CTRL_SET_PROFILE_CYCLE.
+bool profile_cycle_install(uint8_t profile_count, const uint8_t *order, uint8_t len);
+
+// Preset modes (presets.c): record which profiles a stored register block covers, so
+// OW_TX7332_STATUS reports the same profile masks a host-driven write would.
+void profile_cache_note_write(uint8_t tx_idx, uint16_t start_addr, uint16_t reg_count);
 
 #endif /* INC_IF_COMMANDS_H_ */

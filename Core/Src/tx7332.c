@@ -108,7 +108,7 @@ bool TX7332_WriteVerify(TX7332* device, uint16_t addr, uint32_t val){
 	return TX7332_ReadReg(device, addr) == val;
 }
 
-bool TX7332_WriteBulk(TX7332* device, uint16_t addr, uint32_t* pInts, int len) {
+bool TX7332_WriteBulk(TX7332* device, uint16_t addr, const uint32_t* pInts, int len) {
 	HAL_StatusTypeDef status = HAL_OK;
 
     // Validate parameters

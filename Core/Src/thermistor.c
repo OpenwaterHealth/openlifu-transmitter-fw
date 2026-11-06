@@ -14,6 +14,8 @@ static float referenceVoltage;        // ADC reference voltage
 static float pullUpResistance;        // Pull-up resistance value
 
 volatile float tx_temperature = 0.0f;
+volatile uint32_t tx_temperature_tick = 0U;
+volatile bool tx_temperature_valid = false;
 volatile float ambient_temperature = 0.0f;
 
 // Initialize the thermistor
