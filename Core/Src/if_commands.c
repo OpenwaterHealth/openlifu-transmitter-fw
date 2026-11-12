@@ -511,7 +511,7 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 		case OW_CMD_DFU:
 			uartResp->id = cmd->id;
 			uartResp->command = OW_CMD_DFU;
@@ -1071,7 +1071,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 		case OW_CMD_DFU:
 			if (module_id == 0x00){
 				uartResp->command = cmd->command;
@@ -1935,7 +1935,7 @@ static bool raw_write_runs_here(const UartPacket *cmd)
 static uint8_t preset_gate(const UartPacket *cmd)
 {
 #ifdef FDA_MODE
-	return preset_policy_fda_refusal(cmd->packet_type, cmd->command, cmd->reserved);
+	return preset_policy_fda_refusal(cmd->packet_type, cmd->command, cmd->addr, cmd->reserved);
 #else
 	if (preset_policy_raw_write(cmd->packet_type, cmd->command) &&
 	    !presets_raw_write(raw_write_runs_here(cmd))) {
@@ -1983,7 +1983,7 @@ bool process_if_command(UartPacket *cmd, UartPacket *resp)
 	case OW_TX7332:
 		TX7332_ProcessCommand(resp, cmd);
 		break;
-#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 	case OW_I2C_PASSTHRU:
 	{
 		/* Raw I2C passthrough: forward bytes to an I2C slave (typically the

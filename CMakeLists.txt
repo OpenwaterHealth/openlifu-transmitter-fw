@@ -177,6 +177,13 @@ if(FDA_MODE)
         message(FATAL_ERROR "FDA_MODE needs ${FDA_PRESET_HEADER} or ${PRESET_TABLE_HEADER}: generate "
                             "them with the openlifu SDK (generate_fda_preset / generate_preset_set).")
     endif()
+    # A +test image keeps the signed-bootloader DFU entry and raw I2C to the
+    # module bootloader, so factory and bench units on the test presets can be
+    # updated over USB again. A +fda image refuses both (SR-021,
+    # Core/Src/preset_policy.c).
+    if(FW_PRESET_VARIANT STREQUAL "test")
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE FDA_TEST_IMAGE)
+    endif()
     set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 else()
     set(FW_BUILD_VARIANT "")

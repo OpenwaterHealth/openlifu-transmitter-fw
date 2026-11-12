@@ -4,6 +4,11 @@ Bench steps 4.06 (+fda) and 4.08b (+test). Presets-only images only: on a
 standard image these commands would run, and DFU would drop the board into its
 bootloader, so every test here skips there. Keep the console HV off.
 
+A +test image still enters the signed bootloader's DFU (reserved 0) and lets raw
+I2C reach the module bootloader, so units on the test presets can be updated
+over USB; those paths are not run here, since they leave a board in its
+bootloader. Both refuse the STM32 ROM loader (0x77) and raw I2C elsewhere.
+
 The last test resets the transmitter and reconnects.
 """
 
@@ -29,6 +34,11 @@ PASSTHRU_WRITE_READ = 0x01
 # STM32 I2C bootloader "Get" and its complement: a read even if it ran.
 BOOTLOADER_GET = b"\x00\xff"
 
+# OW_CMD_DFU reserved: enter the STM32 ROM loader, refused by every presets-only image.
+DFU_ROM_LOADER = 0x77
+# Any I2C address but the module bootloader's.
+I2C_OTHER_ADDR = 0x50
+
 RECONNECT_TIMEOUT_S = 20.0
 
 
@@ -36,6 +46,11 @@ RECONNECT_TIMEOUT_S = 20.0
 def fda_only(variant):
     if variant not in PRESETS_ONLY:
         pytest.skip("presets-only (+fda / +test) images only: a standard image would run these")
+
+
+def _skip_if_test_image_allows(variant, reserved=0x00):
+    if variant == "test" and reserved != DFU_ROM_LOADER:
+        pytest.skip("a +test image allows it, to update over USB")
 
 
 def _assert_refused_and_still_running(txdevice, variant, r):
@@ -50,17 +65,20 @@ def _assert_refused_and_still_running(txdevice, variant, r):
 @pytest.mark.parametrize("addr", [0, 1], ids=["master", "module1"])
 @pytest.mark.parametrize("packet_type", [OW_CMD, OW_CONTROLLER], ids=["CMD", "CONTROLLER"])
 def test_dfu_is_refused(txdevice, variant, packet_type, addr, reserved):
+    _skip_if_test_image_allows(variant, reserved)
     r = send_raw(txdevice, packet_type, OW_CMD_DFU, addr=addr, reserved=reserved)
     _assert_refused_and_still_running(txdevice, variant, r)
 
 
 @pytest.mark.parametrize("reserved", [0x00, 0x77])
 def test_one_wire_dfu_is_refused(txdevice, variant, reserved):
+    _skip_if_test_image_allows(variant, reserved)
     r = send_raw(txdevice, OW_ONE_WIRE, OW_CMD_DFU, reserved=reserved)
     _assert_refused_and_still_running(txdevice, variant, r)
 
 
 def test_i2c_passthrough_to_the_module_bootloader_is_refused(txdevice, variant):
+    _skip_if_test_image_allows(variant)
     r = send_raw(
         txdevice,
         OW_I2C_PASSTHRU,
@@ -68,6 +86,18 @@ def test_i2c_passthrough_to_the_module_bootloader_is_refused(txdevice, variant):
         addr=I2C_DFU_SLAVE_ADDR,
         reserved=1,
         data=bytearray(BOOTLOADER_GET),
+    )
+    _assert_refused_and_still_running(txdevice, variant, r)
+
+
+def test_i2c_passthrough_elsewhere_is_refused(txdevice, variant):
+    r = send_raw(
+        txdevice,
+        OW_I2C_PASSTHRU,
+        PASSTHRU_WRITE_READ,
+        addr=I2C_OTHER_ADDR,
+        reserved=1,
+        data=bytearray(b"\x00"),
     )
     _assert_refused_and_still_running(txdevice, variant, r)
 
