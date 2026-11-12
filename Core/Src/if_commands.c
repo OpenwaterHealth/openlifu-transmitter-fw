@@ -683,9 +683,10 @@ static void start_sequence(UartPacket *uartResp, bool resume)
 	// no limits armed runs the host's own configuration. A RESUME is held to
 	// shutoff_C instead, by its caller (SR-023).
 	if (!resume) {
-		static char reason[64];
 		uint8_t refused = presets_start_check();
 		if (refused != OW_SUCCESS) {
+			// static: the reply's data points here after we return.
+			static char reason[64];
 			uartResp->reserved = refused;
 			uartResp->data_len = presets_start_refusal(refused, reason, sizeof(reason));
 			uartResp->data = (uint8_t *)reason;

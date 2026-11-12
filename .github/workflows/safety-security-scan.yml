@@ -43,7 +43,6 @@ jobs:
                    --suppress=*:Core/Src/system_stm32l4xx.c \
                    --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
-                   --suppress=variableScope:Core/Src/if_commands.c:683 \
                    --suppress=variableScope:Core/Src/presets.c:590 \
                    --suppress=constParameterPointer:Core/Src/tx7332.c:147 \
                    ./Core/Src ./USB_DEVICE/App
