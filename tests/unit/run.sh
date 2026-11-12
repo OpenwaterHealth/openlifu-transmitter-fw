@@ -1,17 +1,19 @@
 #!/bin/sh
-# Host-side unit tests: build and run each test for the standard and the
-# presets-only (FDA_MODE) build, as the firmware builds them (thermal_limits.c
-# has FDA_MODE code), and the linked presets for each fixture set. Needs a
-# host C compiler (cc); run from the repo root.
+# Host-side unit tests: build and run each test for the standard build and the
+# presets-only (FDA_MODE) +fda and +test builds, as the firmware builds them
+# (thermal_limits.c has FDA_MODE code; preset_policy.c has FDA_TEST_IMAGE
+# code), and the linked presets for each fixture set. Needs a host C compiler
+# (cc); run from the repo root.
 set -eu
 
 out=build/unit
 mkdir -p "$out"
 CFLAGS="-std=c11 -Wall -Wextra -Werror -Itests/unit -ICore/Inc"
 
-for variant in standard fda; do
+for variant in standard fda test; do
 	defs=""
 	[ "$variant" = fda ] && defs="-DFDA_MODE"
+	[ "$variant" = test ] && defs="-DFDA_MODE -DFDA_TEST_IMAGE"
 	cc $CFLAGS $defs tests/unit/test_preset_policy.c Core/Src/preset_policy.c -o "$out/test_preset_policy_$variant"
 	"$out/test_preset_policy_$variant"
 	cc $CFLAGS $defs tests/unit/test_thermal_limits.c Core/Src/thermal_limits.c -o "$out/test_thermal_limits_$variant"

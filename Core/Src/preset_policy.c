@@ -33,14 +33,21 @@ bool preset_policy_raw_write(uint8_t packet_type, uint8_t command)
 	}
 }
 
-uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved)
+uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved,
+                                  bool to_module_bootloader)
 {
 	if (preset_policy_raw_write(packet_type, command)) return OW_INVALID_PACKET;
 
 	switch (packet_type) {
 	case OW_I2C_PASSTHRU:
-		// Raw I2C reaches the module bootloaders (SR-021).
+		// Raw I2C reaches the module bootloaders (SR-021). A +test image
+		// lets it reach them only, to update its modules.
+#ifdef FDA_TEST_IMAGE
+		return to_module_bootloader ? OW_SUCCESS : OW_FDA_REFUSED;
+#else
+		(void)to_module_bootloader;
 		return OW_FDA_REFUSED;
+#endif
 	case OW_CMD:
 	case OW_CONTROLLER:
 	case OW_ONE_WIRE:
@@ -49,7 +56,12 @@ uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t 
 			// reserved 1 is the write; the calibration stays readable.
 			return (reserved == 1U) ? OW_FDA_REFUSED : OW_SUCCESS;
 		case OW_CMD_DFU:
+#ifdef FDA_TEST_IMAGE
+			// The signed bootloader's DFU only, not the ROM loader.
+			return (reserved == PRESET_POLICY_DFU_ROM_LOADER) ? OW_FDA_REFUSED : OW_SUCCESS;
+#else
 			return OW_FDA_REFUSED;
+#endif
 		case OW_CTRL_SET_THERMAL_LIMITS:
 		case OW_CTRL_CLEAR_THERMAL_LIMITS:
 			// The limits are the linked preset's (thermal_limits.h).

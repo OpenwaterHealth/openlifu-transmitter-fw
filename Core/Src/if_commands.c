@@ -29,6 +29,9 @@
 #define COMMS_TIMEOUT 250
 
 extern bool _enter_dfu;
+// A module bootloader's I2C address before the master enumerates it
+// (openlifu_sdk.io.LIFUDFU).
+#define MODULE_BL_DEFAULT_I2C_ADDR 0x72U
 extern bool _force_stm32_dfu; // for testing purposes, forces to enter STM32 system bootloader instead of custom DFU mode
 
 extern TX7332 transmitters[2];
@@ -511,7 +514,7 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 		case OW_CMD_DFU:
 			uartResp->id = cmd->id;
 			uartResp->command = OW_CMD_DFU;
@@ -1071,7 +1074,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 		case OW_CMD_DFU:
 			if (module_id == 0x00){
 				uartResp->command = cmd->command;
@@ -1935,7 +1938,19 @@ static bool raw_write_runs_here(const UartPacket *cmd)
 static uint8_t preset_gate(const UartPacket *cmd)
 {
 #ifdef FDA_MODE
-	return preset_policy_fda_refusal(cmd->packet_type, cmd->command, cmd->reserved);
+	// Raw I2C to a module bootloader: the bootloader's address before
+	// enumeration, or the address of a module the master enumerated in its
+	// bootloader (the SDK's secure slave update). Never a module's app.
+	bool to_module_bootloader = false;
+	if (cmd->packet_type == OW_I2C_PASSTHRU) {
+		to_module_bootloader = (cmd->addr == MODULE_BL_DEFAULT_I2C_ADDR);
+		for (uint8_t m = 1U; !to_module_bootloader && m < MAX_MODULES; m++) {
+			const ModuleInfo *module = ModuleManager_GetModule(m);
+			to_module_bootloader = module != NULL && module->mode == NODE_MODE_BOOTLOADER &&
+			                       module->i2c_address == cmd->addr;
+		}
+	}
+	return preset_policy_fda_refusal(cmd->packet_type, cmd->command, cmd->reserved, to_module_bootloader);
 #else
 	if (preset_policy_raw_write(cmd->packet_type, cmd->command) &&
 	    !presets_raw_write(raw_write_runs_here(cmd))) {
@@ -1983,7 +1998,7 @@ bool process_if_command(UartPacket *cmd, UartPacket *resp)
 	case OW_TX7332:
 		TX7332_ProcessCommand(resp, cmd);
 		break;
-#ifndef FDA_MODE  // refused in FDA_MODE (preset_policy.c), so not built into it
+#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 	case OW_I2C_PASSTHRU:
 	{
 		/* Raw I2C passthrough: forward bytes to an I2C slave (typically the
