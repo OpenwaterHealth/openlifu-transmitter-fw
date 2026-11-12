@@ -24,6 +24,9 @@ jobs:
 
       # 1. Cppcheck with MISRA-C:2012 and Safety focus
       # --error-exitcode=1 ensures the build fails on findings
+      # The per-line suppressions are style findings (scope / const) in the
+      # FDA preset code, not defects; left unrefactored so the bench images
+      # match the reviewed source. Cleared by #67.
       - name: Run Cppcheck (Safety & Standards)
         run: |
           cppcheck --enable=warning,style,performance,portability \
@@ -32,12 +35,16 @@ jobs:
                    --force \
                    --inline-suppr \
                    --template="[{severity}] {file}:{line} {id} - {message}" \
+                   -I USB_DEVICE/Target \
+                   -I Middlewares/ST/STM32_USB_Device_Library/Core/Inc \
                    --suppress=missingIncludeSystem \
                    --suppress=*:Core/Src/lwrb.c \
                    --suppress=*:Core/Src/jsmn.c \
                    --suppress=*:Core/Src/system_stm32l4xx.c \
                    --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
+                   --suppress=variableScope:Core/Src/presets.c:590 \
+                   --suppress=constParameterPointer:Core/Src/tx7332.c:147 \
                    ./Core/Src ./USB_DEVICE/App
 
       # 2. Complexity Analysis (Lizard)

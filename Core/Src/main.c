@@ -33,6 +33,8 @@
 #include "trigger.h"
 #include "i2c_slave.h"
 #include "thermistor.h"
+#include "if_commands.h"
+#include "presets.h"
 
 #ifdef DEBUG_ENABLED
 #include "logging.h"
@@ -648,6 +650,12 @@ int main(void)
     {
       if (get_device_role() == ROLE_MASTER)
       {
+        // The host is gone: stop before the next command, in the same context
+        // as START and RESUME, so neither can undo it.
+        if (trigger_take_host_lost())
+        {
+          (void)stop_sequence();
+        }
         comms_host_check_received(); // check comms
       }
       else
@@ -687,6 +695,8 @@ int main(void)
       if (!isnan(new_tx_temp) && (new_tx_temp > -50.0f) && (new_tx_temp < 150.0f))
       {
         tx_temperature = new_tx_temp;
+        tx_temperature_tick = current_time;
+        tx_temperature_valid = true;
       }
 
       /* Overheat detection with hysteresis */
@@ -696,9 +706,7 @@ int main(void)
         {
           tx_overheat_flag = true;
           if(get_trigger_status() == TRIGGER_STATUS_RUNNING) {
-            stop_trigger_pulse();
-            // send update
-            
+            (void)stop_sequence();
           }
         }
       }
@@ -708,6 +716,21 @@ int main(void)
         {
           tx_overheat_flag = false;
         }
+      }
+
+      // The armed shutoff_C, or a thermistor gone quiet, ends a run.
+      if (get_trigger_status() == TRIGGER_STATUS_RUNNING && presets_shutoff_check() != OW_SUCCESS)
+      {
+        (void)stop_sequence();
+      }
+
+      // The treatment timeout ends a running or paused sequence. The preset
+      // goes with it, so only a STOP and a fresh load can start another.
+      if (trigger_timeout_expired())
+      {
+        (void)stop_sequence();
+        (void)presets_unload();
+        trigger_end_timeout();
       }
     }
   }
@@ -1704,9 +1727,13 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
       }
       else
       {
+#ifndef FDA_MODE
         // jump to bootloader DFU
         // 16k SRAM in address 0x2000 0000 - 0x2000 3FFF
         *((unsigned long *)0x20003FF0) = 0xDEADBEEF;
+#endif
+        // A presets-only image never enters the STM32 ROM loader, which takes
+        // unsigned images (SR-021): with no secure bootloader it only resets.
       }
 
     }
