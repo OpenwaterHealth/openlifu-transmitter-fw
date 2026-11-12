@@ -44,7 +44,7 @@ static uint8_t expected_global_refusal(uint8_t command, uint8_t reserved)
 }
 
 // What the image must refuse, and with which code; OW_SUCCESS otherwise.
-static uint8_t expected_refusal(uint8_t packet_type, uint8_t command, uint8_t addr, uint8_t reserved)
+static uint8_t expected_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved, bool to_bl)
 {
 	switch (packet_type) {
 	case OW_TX7332:
@@ -74,9 +74,9 @@ static uint8_t expected_refusal(uint8_t packet_type, uint8_t command, uint8_t ad
 		return expected_global_refusal(command, reserved);
 	case OW_I2C_PASSTHRU:
 #ifdef FDA_TEST_IMAGE
-		return (addr == 0x72U) ? OW_SUCCESS : OW_FDA_REFUSED;
+		return to_bl ? OW_SUCCESS : OW_FDA_REFUSED;
 #else
-		(void)addr;
+		(void)to_bl;
 		return OW_FDA_REFUSED;
 #endif
 	default:
@@ -107,15 +107,15 @@ int main(int argc, char **argv)
 	for (unsigned t = 0; t < N_TYPES; t++) {
 		for (unsigned c = 0; c < 256U; c++) {
 			// reserved matters to USR_CFG (0 read, 1 write) and DFU (0x77 the ROM
-			// loader); 2 and 0xFF stand in for the rest. addr matters to raw I2C
-			// (0x72 the module bootloader); 0 and 0x50 stand in for the rest.
+			// loader); 2 and 0xFF stand in for the rest. Whether raw I2C goes to
+			// a module bootloader is the caller's to say (if_commands.c).
 			static const uint8_t reserveds[] = { 0U, 1U, 2U, 0x77U, 0xFFU };
-			static const uint8_t addrs[] = { 0U, 0x50U, 0x72U };
 			for (unsigned r = 0; r < sizeof(reserveds); r++)
-			for (unsigned a = 0; a < sizeof(addrs); a++) {
-				uint8_t pt = packet_types[t], cmd = (uint8_t)c, res = reserveds[r], addr = addrs[a];
-				uint8_t got = preset_policy_fda_refusal(pt, cmd, addr, res);
-				uint8_t want = expected_refusal(pt, cmd, addr, res);
+			for (unsigned a = 0; a < 2U; a++) {
+				uint8_t pt = packet_types[t], cmd = (uint8_t)c, res = reserveds[r];
+				bool to_bl = (a == 1U);
+				uint8_t got = preset_policy_fda_refusal(pt, cmd, res, to_bl);
+				uint8_t want = expected_refusal(pt, cmd, res, to_bl);
 				check("refusal", got, want, pt, cmd, res);
 				if (got != OW_SUCCESS && a == 0U) {
 					refused++;
@@ -132,23 +132,23 @@ int main(int argc, char **argv)
 	}
 
 	// Spot checks that read as the requirement, not the table.
-	check("SET_SWTRIG refused", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_SET_SWTRIG, 0, 0), OW_INVALID_PACKET, OW_CONTROLLER, OW_CTRL_SET_SWTRIG, 0);
-	check("GET_SWTRIG open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_GET_SWTRIG, 0, 0), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_GET_SWTRIG, 0);
-	check("START open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_START_SWTRIG, 0, 0), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_START_SWTRIG, 0);
-	check("STOP open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_STOP_SWTRIG, 0, 0), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_STOP_SWTRIG, 0);
-	check("PRESET_LOAD open", preset_policy_fda_refusal(OW_CONTROLLER, OW_PRESET_LOAD, 0, 0), OW_SUCCESS, OW_CONTROLLER, OW_PRESET_LOAD, 0);
-	check("PRESET_LOADED open", preset_policy_fda_refusal(OW_CONTROLLER, OW_PRESET_LOADED, 0, 0), OW_SUCCESS, OW_CONTROLLER, OW_PRESET_LOADED, 0);
-	check("USR_CFG read open", preset_policy_fda_refusal(OW_CMD, OW_CMD_USR_CFG, 0, 0), OW_SUCCESS, OW_CMD, OW_CMD_USR_CFG, 0);
-	check("TX7332 read open", preset_policy_fda_refusal(OW_TX7332, OW_TX7332_RREG, 0, 0), OW_SUCCESS, OW_TX7332, OW_TX7332_RREG, 0);
+	check("SET_SWTRIG refused", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_SET_SWTRIG, 0, false), OW_INVALID_PACKET, OW_CONTROLLER, OW_CTRL_SET_SWTRIG, 0);
+	check("GET_SWTRIG open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_GET_SWTRIG, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_GET_SWTRIG, 0);
+	check("START open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_START_SWTRIG, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_START_SWTRIG, 0);
+	check("STOP open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_STOP_SWTRIG, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_STOP_SWTRIG, 0);
+	check("PRESET_LOAD open", preset_policy_fda_refusal(OW_CONTROLLER, OW_PRESET_LOAD, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_PRESET_LOAD, 0);
+	check("PRESET_LOADED open", preset_policy_fda_refusal(OW_CONTROLLER, OW_PRESET_LOADED, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_PRESET_LOADED, 0);
+	check("USR_CFG read open", preset_policy_fda_refusal(OW_CMD, OW_CMD_USR_CFG, 0, false), OW_SUCCESS, OW_CMD, OW_CMD_USR_CFG, 0);
+	check("TX7332 read open", preset_policy_fda_refusal(OW_TX7332, OW_TX7332_RREG, 0, false), OW_SUCCESS, OW_TX7332, OW_TX7332_RREG, 0);
 	check("ARM_PROFILE_CYCLE not a host write", preset_policy_raw_write(OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE), 0, OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE, 0);
 	// The thermal limits are the linked preset's in FDA_MODE: the host may read
 	// them only. In a standard image setting them is not in the raw-write
 	// table: they address module 0 only, and their handler unloads a loaded
 	// preset itself (if_commands.c).
-	check("GET_THERMAL_LIMITS open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0, 0), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0);
+	check("GET_THERMAL_LIMITS open", preset_policy_fda_refusal(OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_CTRL_GET_THERMAL_LIMITS, 0);
 	static const uint8_t limit_writes[] = { OW_CTRL_SET_THERMAL_LIMITS, OW_CTRL_CLEAR_THERMAL_LIMITS };
 	for (unsigned i = 0; i < sizeof(limit_writes); i++) {
-		check("thermal limit write refused", preset_policy_fda_refusal(OW_CONTROLLER, limit_writes[i], 0, 0), OW_FDA_REFUSED, OW_CONTROLLER, limit_writes[i], 0);
+		check("thermal limit write refused", preset_policy_fda_refusal(OW_CONTROLLER, limit_writes[i], 0, false), OW_FDA_REFUSED, OW_CONTROLLER, limit_writes[i], 0);
 		check("thermal limit write not a raw write", preset_policy_raw_write(OW_CONTROLLER, limit_writes[i]), 0, OW_CONTROLLER, limit_writes[i], 0);
 	}
 	// A standard image's preset store is not a raw write: storing or deleting
@@ -167,12 +167,12 @@ int main(int argc, char **argv)
 #else
 	const uint8_t dfu_want = OW_FDA_REFUSED;
 #endif
-	check("DFU (signed bootloader)", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0, 0), dfu_want, OW_CMD, OW_CMD_DFU, 0);
-	check("one-wire DFU", preset_policy_fda_refusal(OW_ONE_WIRE, OW_CMD_DFU, 0, 0), dfu_want, OW_ONE_WIRE, OW_CMD_DFU, 0);
-	check("module DFU", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 1, 0), dfu_want, OW_CMD, OW_CMD_DFU, 0);
-	check("DFU to the ROM loader refused", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0, 0x77), OW_FDA_REFUSED, OW_CMD, OW_CMD_DFU, 0x77);
-	check("raw I2C to the module bootloader", preset_policy_fda_refusal(OW_I2C_PASSTHRU, 0x01, 0x72, 4), dfu_want, OW_I2C_PASSTHRU, 0x01, 4);
-	check("raw I2C elsewhere refused", preset_policy_fda_refusal(OW_I2C_PASSTHRU, 0x01, 0x48, 2), OW_FDA_REFUSED, OW_I2C_PASSTHRU, 0x01, 2);
+	check("DFU (signed bootloader)", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0, false), dfu_want, OW_CMD, OW_CMD_DFU, 0);
+	check("one-wire DFU", preset_policy_fda_refusal(OW_ONE_WIRE, OW_CMD_DFU, 0, false), dfu_want, OW_ONE_WIRE, OW_CMD_DFU, 0);
+	check("DFU, whatever the I2C flag", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0, true), dfu_want, OW_CMD, OW_CMD_DFU, 0);
+	check("DFU to the ROM loader refused", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0x77, false), OW_FDA_REFUSED, OW_CMD, OW_CMD_DFU, 0x77);
+	check("raw I2C to the module bootloader", preset_policy_fda_refusal(OW_I2C_PASSTHRU, 0x01, 4, true), dfu_want, OW_I2C_PASSTHRU, 0x01, 4);
+	check("raw I2C to anything else refused", preset_policy_fda_refusal(OW_I2C_PASSTHRU, 0x01, 2, false), OW_FDA_REFUSED, OW_I2C_PASSTHRU, 0x01, 2);
 
 #if defined(FDA_TEST_IMAGE)
 	const char *build = "FDA (+test)";

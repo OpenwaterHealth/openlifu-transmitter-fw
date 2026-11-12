@@ -33,7 +33,8 @@ bool preset_policy_raw_write(uint8_t packet_type, uint8_t command)
 	}
 }
 
-uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t addr, uint8_t reserved)
+uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved,
+                                  bool to_module_bootloader)
 {
 	if (preset_policy_raw_write(packet_type, command)) return OW_INVALID_PACKET;
 
@@ -42,9 +43,9 @@ uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t 
 		// Raw I2C reaches the module bootloaders (SR-021). A +test image
 		// lets it reach them only, to update its modules.
 #ifdef FDA_TEST_IMAGE
-		return (addr == PRESET_POLICY_MODULE_BL_I2C_ADDR) ? OW_SUCCESS : OW_FDA_REFUSED;
+		return to_module_bootloader ? OW_SUCCESS : OW_FDA_REFUSED;
 #else
-		(void)addr;
+		(void)to_module_bootloader;
 		return OW_FDA_REFUSED;
 #endif
 	case OW_CMD:

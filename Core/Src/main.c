@@ -1727,9 +1727,13 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
       }
       else
       {
+#ifndef FDA_MODE
         // jump to bootloader DFU
         // 16k SRAM in address 0x2000 0000 - 0x2000 3FFF
         *((unsigned long *)0x20003FF0) = 0xDEADBEEF;
+#endif
+        // A presets-only image never enters the STM32 ROM loader, which takes
+        // unsigned images (SR-021): with no secure bootloader it only resets.
       }
 
     }

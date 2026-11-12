@@ -5,9 +5,11 @@ standard image these commands would run, and DFU would drop the board into its
 bootloader, so every test here skips there. Keep the console HV off.
 
 A +test image still enters the signed bootloader's DFU (reserved 0) and lets raw
-I2C reach the module bootloader, so units on the test presets can be updated
-over USB; those paths are not run here, since they leave a board in its
-bootloader. Both refuse the STM32 ROM loader (0x77) and raw I2C elsewhere.
+I2C reach a module bootloader (0x72, or a module the master enumerated in its
+bootloader), so units on the test presets can be updated over USB. DFU entry is
+not run here, since it leaves a board in its bootloader; the I2C gate is checked
+at 0x72 with no bootloader listening. Both refuse the STM32 ROM loader (0x77)
+and raw I2C elsewhere.
 
 The last test resets the transmitter and reconnects.
 """
@@ -36,7 +38,7 @@ BOOTLOADER_GET = b"\x00\xff"
 
 # OW_CMD_DFU reserved: enter the STM32 ROM loader, refused by every presets-only image.
 DFU_ROM_LOADER = 0x77
-# Any I2C address but the module bootloader's.
+# Not a module bootloader's I2C address: not 0x72, and not a module (0x20 on).
 I2C_OTHER_ADDR = 0x50
 
 RECONNECT_TIMEOUT_S = 20.0
@@ -88,6 +90,24 @@ def test_i2c_passthrough_to_the_module_bootloader_is_refused(txdevice, variant):
         data=bytearray(BOOTLOADER_GET),
     )
     _assert_refused_and_still_running(txdevice, variant, r)
+
+
+def test_test_image_lets_raw_i2c_reach_the_module_bootloader(txdevice, variant):
+    """+test only: the gate lets it through. No module bootloader listens at
+    0x72 here, so the I2C write fails, but not with the FDA refusal."""
+    if variant != "test":
+        pytest.skip("+test images only")
+    r = send_raw(
+        txdevice,
+        OW_I2C_PASSTHRU,
+        PASSTHRU_WRITE_READ,
+        addr=I2C_DFU_SLAVE_ADDR,
+        reserved=1,
+        data=bytearray(BOOTLOADER_GET),
+    )
+    assert r is not None, "no reply"
+    assert not (r.packet_type == OW_ERROR and r.reserved == OW_FDA_REFUSED), "refused by the FDA gate"
+    assert txdevice.ping()
 
 
 def test_i2c_passthrough_elsewhere_is_refused(txdevice, variant):
