@@ -263,6 +263,9 @@ jobs:
           test -s _artifacts/openlifu-transmitter-fw-signed.bin
           FWVER="$(sed -n 's/.*FW version *: *\([0-9]\+\).*/\1/p' _sign.out | head -n1)"
           echo "fwversion=$FWVER" >> "$GITHUB_OUTPUT"
+          # Public half only (DER SPKI SHA-256), recorded in the SBOM.
+          KEYFP="$(openssl pkey -in "$KD/ecdsa_private.pem" -pubout -outform DER | sha256sum | cut -d' ' -f1)"
+          echo "keyfp=$KEYFP" >> "$GITHUB_OUTPUT"
           echo "Signed slot image (semver=${{ steps.fwver.outputs.verstr }}, FwVersion=$FWVER)"
 
       # ---------------------------
@@ -295,6 +298,31 @@ jobs:
             ghcr.io/openwaterhealth/stm32-build-env:latest \
             bash -lc "arm-none-eabi-objcopy -I binary -O ihex --change-addresses=0x08000000 _artifacts/openlifu-transmitter-fw-production.bin _artifacts/openlifu-transmitter-fw-production.hex"
           test -s _artifacts/openlifu-transmitter-fw-production.hex
+
+      # ---------------------------
+      # SBOM (CycloneDX 1.6) for the signed / production images: scripts/gen_sbom.py
+      # with the build image's toolchain and newlib versions, the bundled bootloader
+      # release (tag + SHA-256), the signing public-key fingerprint, and the
+      # reviewed, hash-pinned scripts/sbom-manifest.json.
+      # ---------------------------
+      - name: Generate SBOM
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/openwaterhealth/stm32-build-env:latest
+          IMG_REF="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMG")"
+          TOOLCHAIN="$(docker run --rm "$IMG" arm-none-eabi-gcc --version | head -1)"
+          NEWLIB="$(docker run --rm "$IMG" sh -c 'echo "#include <newlib.h>" | arm-none-eabi-gcc -E -dM -' \
+                    | sed -n 's/^#define _NEWLIB_VERSION "\(.*\)"/\1/p')"
+          test -n "$NEWLIB"
+          BL_SHA="$(sha256sum _artifacts/open-lifu-transmitter-bl.bin | cut -d' ' -f1)"
+          python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
+            --name "${GITHUB_REPOSITORY#*/}" --config Release \
+            --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
+            --bundled-bootloader open-lifu-transmitter-bl "${{ steps.bl.outputs.tag }}" "$BL_SHA" \
+            --signing-domain research \
+            --signing-key-fingerprint "${{ steps.sign.outputs.keyfp }}" \
+            --property "openwater:signed-version=${{ steps.fwver.outputs.verstr }}" \
+            -o _artifacts/openlifu-transmitter-fw.cdx.json
 
       # Collect the bare-metal image with an unambiguous name (both preset builds
       # otherwise emit the same lifu-transmitter-fw.* basename).
@@ -332,6 +360,7 @@ jobs:
           path: |
             _artifacts/openlifu-transmitter-fw-production.bin
             _artifacts/openlifu-transmitter-fw-production.hex
+            _artifacts/openlifu-transmitter-fw.cdx.json
 
       # ---------------------------
       # Create GitHub Release (tags only)
@@ -397,3 +426,4 @@ jobs:
             _artifacts/openlifu-transmitter-fw-signed.bin
             _artifacts/openlifu-transmitter-fw-production.bin
             _artifacts/openlifu-transmitter-fw-production.hex
+            _artifacts/openlifu-transmitter-fw.cdx.json
