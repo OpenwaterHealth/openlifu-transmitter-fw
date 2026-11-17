@@ -418,7 +418,6 @@ typedef enum
   */
 
 
-
 /** @defgroup USBD_DEF_Exported_Macros
   * @{
   */
