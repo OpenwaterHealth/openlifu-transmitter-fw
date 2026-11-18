@@ -155,6 +155,17 @@
 #define PRESETS_ADDRESS                ADDR_FLASH_PAGE_110
 #define PRESETS_SIZE                   ((uint32_t)(ADDR_FLASH_PAGE_126 - ADDR_FLASH_PAGE_110))
 
+// Anti-rollback version log, page 126: owned by the secure bootloader
+// (open-lifu-transmitter-bl memory_map.h MEM_ANTIROLLBACK_BASE). The application
+// must never write or erase it.
+#define BOOTLOADER_ANTIROLLBACK_ADDRESS   ADDR_FLASH_PAGE_126
+#define BOOTLOADER_ANTIROLLBACK_SIZE      ((uint32_t)(ADDR_FLASH_PAGE_127 - ADDR_FLASH_PAGE_126))
+
+_Static_assert(PRESETS_ADDRESS + PRESETS_SIZE == BOOTLOADER_ANTIROLLBACK_ADDRESS,
+               "the presets must end where the bootloader's anti-rollback page starts");
+_Static_assert(BOOTLOADER_ANTIROLLBACK_ADDRESS + BOOTLOADER_ANTIROLLBACK_SIZE == APPLICATION_USER_CONFIG,
+               "the anti-rollback page must sit between the presets and the user config");
+
 #ifdef __cplusplus
 }
 #endif
