@@ -64,12 +64,11 @@
 _Static_assert(TX_OVERHEAT_HYSTERESIS <= TX_OVERHEAT_TRIP_POINT,
                "TX_OVERHEAT_HYSTERESIS must not exceed TX_OVERHEAT_TRIP_POINT");
 
-#define BL_BKP_SIGNATURE (0x4F57424CU)     /* 'OWBL' */
 #define BL_BKP_REQ_DFU_MAGIC (0xB007C0DEU) /* "BOOT CODE" — SBSFU bootloader DFU request, RTC->BKP7R */
 
 /* STM32L4 system-memory (ROM) bootloader entry point */
 #define STM32_SYS_BL_ADDR   (0x1FFF0000U)
-/* Our custom bootloader occupies 0x08000000..0x0800FFFF (62 KB) */
+/* Our custom bootloader occupies 0x08000000..0x0800FFFF (64 KB) */
 #define CUSTOM_BL_START     (0x08000000U)
 #define CUSTOM_BL_END       (0x08010000U)
 
@@ -103,9 +102,6 @@ static void bl_bkp_enable(void)
 void bootloader_mark_boot_ok(void)
 {
   bl_bkp_enable();
-  RTC->BKP0R = BL_BKP_SIGNATURE;
-  RTC->BKP2R = 0U; /* clears in-progress/force bits + failure count */
-  RTC->BKP3R = 0U; /* clears last-bad-fw marker */
   /* SBSFU secure bootloader failsafe boot counter: the bootloader increments
    * BKP6R before every launch and falls back to DFU after 3 attempts that
    * were not confirmed. Clearing it here confirms this boot succeeded. */
