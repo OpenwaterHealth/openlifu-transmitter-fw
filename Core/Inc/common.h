@@ -16,6 +16,13 @@
 #define ONEWIRE_MAX_SIZE 48
 #define DATA_MAX_SIZE 2048
 
+/* OW_CMD_SIGCHK reply payload: a status byte, then for a slot build the
+ * signed SBSFU header from the slot start. The host checks the header's
+ * ECDSA signature against a public key (openlifu-sdk check_signature). */
+#define SIGCHK_SLOT_IMAGE  0x00U   /* data[1..320]: the signed header */
+#define SIGCHK_BARE_METAL  0x01U   /* no bootloader, so no signed header */
+#define SIGCHK_HEADER_LEN  320U    /* sizeof(SE_FwRawHeaderTypeDef) */
+
 // Configuration: each module has two transmitters; adjust as necessary.
 #define TX_PER_MODULE 2
 #define MAX_MODULES   6  // Total number of modules (master + slaves)
@@ -94,6 +101,7 @@ typedef enum {
 	OW_CMD_HWID = 0x05,
 	OW_CMD_GET_TEMP = 0x06,
 	OW_CMD_GET_AMBIENT = 0x07,
+	OW_CMD_SIGCHK = 0x08,      // signature check: the signed header, or bare metal
 	OW_CMD_ASYNC = 0x09,
 	OW_CMD_USR_CFG = 0x0A,
 	OW_CMD_CLEAR_CONFIG = 0x0B,  // Phase 2: broadcast down the chain; each node drops its

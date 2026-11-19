@@ -38,6 +38,7 @@ extern TX7332 transmitters[2];
 extern bool async_enabled;
 
 static uint32_t id_words[3] = {0};
+static uint8_t sigchk_reply[1U + SIGCHK_HEADER_LEN];   // OW_CMD_SIGCHK
 static char retTriggerJson[0xFF];
 static uint8_t module_count = 0;
 static uint8_t node_mode_byte = NODE_MODE_APP;   // this node runs application firmware
@@ -811,6 +812,30 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				id_words[2] = HAL_GetUIDw2();
 				uartResp->data_len = HW_ID_DATA_LENGTH;
 				uartResp->data = (uint8_t *)&id_words;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
+			}
+			break;
+		case OW_CMD_SIGCHK:
+			// The host verifies the signature (SR-021): a slot build sends the
+			// signed header the bootloader checked at boot; a bare-metal build
+			// has none and says so.
+			cmd->data_len = sizeof(sigchk_reply); //passing amount to read if forwarding to slave
+			if (module_id == 0x00)
+			{
+				uartResp->id = cmd->id;
+				uartResp->command = cmd->command;
+				uartResp->reserved = cmd->reserved;
+				uartResp->addr = cmd->addr;
+#ifdef BARE_METAL
+				sigchk_reply[0] = SIGCHK_BARE_METAL;
+				uartResp->data_len = 1U;
+#else
+				sigchk_reply[0] = SIGCHK_SLOT_IMAGE;
+				memcpy(&sigchk_reply[1], (const void *)APPLICATION_ADDRESS, SIGCHK_HEADER_LEN);
+				uartResp->data_len = sizeof(sigchk_reply);
+#endif
+				uartResp->data = sigchk_reply;
 			} else {
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
