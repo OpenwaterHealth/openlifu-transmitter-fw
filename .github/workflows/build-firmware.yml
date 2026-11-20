@@ -125,13 +125,18 @@ jobs:
             ghcr.io/openwaterhealth/stm32-build-env:latest \
             bash -lc "git config --global --add safe.directory /workspace && cmake --preset Release-BareMetal && cmake --build build/Release-BareMetal --config Release --target all -j 10"
 
-      # Clinical image (FDA_MODE): compiled as a check only. The clinical
-      # pipeline builds, signs (Cloud KMS) and publishes it; nothing here does.
-      # It is the same firmware as the slot image, so its presets come from the
-      # preset slots, not the build.
+      # Clinical image (FDA_MODE): compiled as a check only. clinical-build.yml
+      # builds it from a tag, signs it with the Cloud KMS key on approval and
+      # stores it in the artifact bucket; nothing here does. It is the same
+      # firmware as the slot image, so its presets come from the preset slots,
+      # not the build.
       - name: Build clinical image as a check (Release-FDA)
         run: |
-          docker run --rm             -v "$GITHUB_WORKSPACE":/workspace             -w /workspace             ghcr.io/openwaterhealth/stm32-build-env:latest             bash -lc "git config --global --add safe.directory /workspace && cmake --preset Release-FDA && cmake --build build/Release-FDA --config Release --target all -j 10"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            ghcr.io/openwaterhealth/stm32-build-env:latest \
+            bash -lc "git config --global --add safe.directory /workspace && cmake --preset Release-FDA && cmake --build build/Release-FDA --config Release --target all -j 10"
 
       # ---------------------------
       # Resolve which open-lifu-transmitter-bl release to bundle. Uses the
