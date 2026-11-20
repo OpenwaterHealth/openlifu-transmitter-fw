@@ -70,18 +70,18 @@ enable_language(C ASM)
 # Bare-metal build option (mirrors openlifu-console-fw):
 #   BARE_METAL=OFF (default) : image runs under the SBSFU secure bootloader from
 #                              the active slot — FLASH origin=0x08010400,
-#                              LENGTH=155K, VTOR=0x08010400 (slot + signed-header
+#                              LENGTH=147K, VTOR=0x08010400 (slot + signed-header
 #                              offset; uses STM32L443XX_FLASH.ld). This is the
 #                              image that gets signed.
-#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=220K, no
+#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=212K, no
 #                              bootloader (uses STM32L443RCIX_FLASH.ld).
 option(BARE_METAL "Build a bare-metal image (no bootloader; runs at 0x08000000)" OFF)
 
 if(BARE_METAL)
-    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=220K")
+    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=212K")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH.ld")
 else()
-    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=155K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
+    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=147K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld")
 endif()
 
@@ -142,9 +142,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 #                   generate_preset_set
 #
 # Every other build is a standard image: the host owns the TX7332 registers
-# and the trigger, and may also load presets from pages 110-125. Only a
-# bare-metal standard image can store presets there, since the bootloader's
-# slot still covers pages 110-125.
+# and the trigger, and may also load presets from pages 106-125. Only a
+# bare-metal standard image can store presets there while bootloaders before
+# 1.1.0-rc.1 have a slot that still covers pages 106-125.
 option(FDA_MODE "Presets-only: one preset or a set, linked into the image, read-only" OFF)
 
 # A presets-only (FDA_MODE) image reports which preset set it carries:
@@ -187,7 +187,7 @@ if(FDA_MODE)
     set(FW_BUILD_VARIANT "${FW_PRESET_VARIANT}")
 else()
     set(FW_BUILD_VARIANT "")
-    message(STATUS "FDA mode    : OFF (standard: host control, preset slots at pages 110-125)")
+    message(STATUS "FDA mode    : OFF (standard: host control, preset slots at pages 106-125)")
 endif()
 
 # OW_CMD_VERSION returns FW_VERSION. A presets-only image appends

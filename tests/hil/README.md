@@ -29,8 +29,8 @@ Keep the console HV off. These tests load presets and send trigger commands,
 and none of them needs acoustic output.
 
 `test_preset_store.py` deletes every preset it stored, but a run cut short can
-leave pages 110-125 written. Erase them (or mass-erase) before flashing the
-bootloader and a signed image on that board: bootloader 1.0.1 will not boot
+leave pages 106-125 written. Erase them (or mass-erase) before flashing the
+bootloader and a signed image on that board: a bootloader before 1.1.0-rc.1 will not boot
 an image whose slot holds anything there (#56).
 
 | File | Image | Bench step | Checks |

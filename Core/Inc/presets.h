@@ -17,10 +17,9 @@
  *               SDK's generate_preset_set) and the headers it includes.
  *             CMake picks whichever header the tree has. Flashing or updating
  *             the image writes them.
- *   standard  every other build: presets in pages 110-125, above the
- *             application slot: 16 slots of one page, slot N being preset
- *             index N. A blob longer than a page runs on into the next slot,
- *             which then has no preset of its own. The host also keeps the
+ *   standard  every other build: presets in pages 106-125, above the
+ *             application slot: 10 slots of 4 KB (memory_map.h), slot N being
+ *             preset index N; a blob fits one slot. The host also keeps the
  *             registers and the trigger: a raw register, profile or trigger
  *             write leaves nothing loaded on the module that runs it, and is
  *             refused (OW_PRESET_BUSY) while a loaded preset runs or is
@@ -34,7 +33,7 @@
  * the happy path.
  *
  * Only a bare-metal standard image stores presets (PRESET_STORE). Under the
- * bootloader, pages 110-125 are the end of its slot, which it checks are
+ * bootloader before 1.1.0-rc.1, pages 106-125 are the end of its slot, which it checks are
  * erased at every boot, so a stored preset would stop the image booting; a
  * signed standard image therefore finds every slot empty.
  *
@@ -69,6 +68,7 @@
 #define PRESET_STORE
 #endif
 
+#include "memory_map.h"
 #include "tx7332.h"
 
 #include <stdbool.h>
@@ -113,9 +113,9 @@
 // 2 added treatment_timeout_s; a version 1 blob is refused, not defaulted.
 #define PRESET_BLOB_VERSION 2u
 
-#define PRESET_SLOTS       16u
-#define PRESET_SLOT_SIZE   2048u                       // one flash page
-#define PRESET_BLOB_MAX    (2u * PRESET_SLOT_SIZE)     // a blob may take two slots
+// The slots are fixed in the flash map (memory_map.h PRESET_SLOT_*).
+#define PRESET_SLOTS       PRESET_SLOT_COUNT
+#define PRESET_BLOB_MAX    PRESET_SLOT_SIZE            // a blob fits one slot
 
 // Preset indexes: a standard image has every slot; FDA mode runs the presets linked in,
 // one from fda_preset.h, or as many as the generated preset_table.h defines.
