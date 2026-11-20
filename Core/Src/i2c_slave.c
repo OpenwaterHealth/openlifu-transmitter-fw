@@ -231,10 +231,18 @@ void I2C_Process() {
 	}
 	else
 	{
-		set_transmit_buffer(NULL);
+		// The refusal and its code go back to the master (OW_ERROR, then the
+		// code as the one data byte), which replies to the host with them;
+		// without it a module's refusal reached the host as an empty success.
+		static uint8_t error_code;
+		error_code = resp.reserved;
+		packet_to_send_to_master.id = resp.id;
+		packet_to_send_to_master.cmd = resp.command;
+		packet_to_send_to_master.reserved = OW_ERROR;
+		packet_to_send_to_master.data_len = 1;
+		packet_to_send_to_master.pData = &error_code;
+		set_transmit_buffer(&packet_to_send_to_master);
 	}
-	
-
 }
 
 bool set_transmit_buffer(I2C_TX_Packet* packet)

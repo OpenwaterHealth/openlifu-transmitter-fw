@@ -244,6 +244,13 @@ static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd,
 		uartResp->packet_type = ret_i2c_packet.reserved;
 		uartResp->data_len = ret_i2c_packet.data_len;
 		uartResp->data = (uint8_t *)ret_i2c_packet.pData;
+		// A module's refusal (i2c_slave.c): OW_ERROR, its code the one data
+		// byte. Reply with the code where the host reads it.
+		if (ret_i2c_packet.reserved == OW_ERROR && ret_i2c_packet.data_len >= 1U) {
+			uartResp->reserved = ret_i2c_packet.pData[0];
+			uartResp->data_len = 0;
+			uartResp->data = NULL;
+		}
 	} else {
 		uartResp->packet_type = OW_ERROR;
 	}
