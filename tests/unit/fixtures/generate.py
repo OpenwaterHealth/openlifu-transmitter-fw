@@ -1,17 +1,14 @@
-"""Regenerate the preset fixtures tests/unit/test_presets_linked.c links.
+"""Regenerate the preset fixture tests/unit/test_preset_slots.c stores.
 
-Each fixture is what a presets-only build links, made by the openlifu SDK's
-own generators from a preset context in openlifu-diathermy-application
-(preset_settings/<context>/presets.json lists the presets in index order):
+The fixture is one generated preset blob (presets/fda_preset.h, the openlifu
+SDK's generate_fda_preset: a C array of the bytes) from a one-preset context
+in openlifu-diathermy-application (preset_settings/<context>/presets.json).
+The test writes it into the preset slots itself, behind a PRS1 header.
 
-    one preset   presets/fda_preset.h            generate_fda_preset
-    several      presets/preset_table.h + one    generate_preset_set
-                 header per preset
-
-expected.h holds what the host computes for each index, independently of the
+expected.h holds what the host computes for it, independently of the
 firmware: the preset id, settings_crc, regs_crc and run lengths.
 
-    python tests/unit/fixtures/generate.py <preset_settings dir> fda test
+    python tests/unit/fixtures/generate.py <preset_settings dir> fda
 """
 
 import json
@@ -21,7 +18,6 @@ from pathlib import Path
 from openlifu_sdk.io.LIFUTXPresets import (
     compile_preset,
     generate_fda_preset,
-    generate_preset_set,
     regs_crc,
 )
 
@@ -74,10 +70,9 @@ def main(argv: list) -> int:
         presets.mkdir(parents=True, exist_ok=True)
         for old in presets.glob("*.h"):
             old.unlink()
-        if len(configs) == 1:
-            generate_fda_preset(presets, configs[0], context)
-        else:
-            generate_preset_set(presets, configs, context)
+        if len(configs) != 1:
+            raise SystemExit("%s: the fixture is one preset, the context has %d" % (context, len(configs)))
+        generate_fda_preset(presets, configs[0], context)
         write_expected(out / "expected.h", context, configs)
         print("%s: %d preset(s) -> %s" % (context, len(configs), out))
     return 0

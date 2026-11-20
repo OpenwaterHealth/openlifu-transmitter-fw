@@ -8,9 +8,13 @@ image was built with -- one preset file, or a whole preset context:
 
 Skipped unless one is given and a transmitter answers on USB.
 
-A presets-only (FDA_MODE) image reports its preset set as a version suffix,
-+fda or +test, and holds preset 0 built in. A standard image has no suffix;
-on it the tests store the preset in slot 0, which needs a bare-metal image.
+Every image reads its presets from the preset slots (pages 106-125). The
+clinical (FDA_MODE) image cannot store one: its slot 0 must already hold this
+preset, written through the bootloader (openlifu-sdk
+LIFUDFUManager.program_transmitter_preset). On a standard image the tests store
+the preset in slot 0 themselves, which needs the slots: a bare-metal image, or
+one under transmitter bootloader >= 1.1.0-rc.1. The version carries no
+variant; the clinical image is told apart by its refusal of a preset write.
 """
 
 import json
@@ -41,22 +45,24 @@ LIMITS_SOURCES = {0: "none", 1: "preset", 2: "host"}
 
 PRESET_INDEX = 0
 
-# The version suffixes of a presets-only image: the preset context it links.
-PRESETS_ONLY = ("fda", "test")
+# OW_PRESET_WRITE: the clinical image refuses it (OW_FDA_REFUSED), a standard
+# one takes it (or refuses an empty upload as malformed).
+OW_PRESET_WRITE = 0x52
+OW_FDA_REFUSED = 0xF8
 
 
 def pytest_addoption(parser):
     parser.addoption(
         "--preset",
         default=None,
-        help="The preset .json the flashed image's preset 0 was generated from.",
+        help="The preset .json in slot 0.",
     )
     parser.addoption(
         "--context",
         default=None,
         help="A preset context folder (presets.json, then <id>/<id>_settings.json per "
         "preset), as in openlifu-diathermy-application's preset_settings/<context>: "
-        "the set a presets-only image links, in index order.",
+        "its presets in index order; the first is the one in slot 0.",
     )
     parser.addoption(
         "--shutoff-wait",
@@ -70,7 +76,7 @@ def pytest_addoption(parser):
 def _compile(path: Path, preset=None) -> dict:
     raw = path.read_bytes()
     # A released settings .json carries no "id": it comes from the file name,
-    # as generate_presets.py named the preset built into the image.
+    # as the diathermy application names its presets.
     return compile_preset(
         json.loads(raw), preset_id=preset or preset_id(str(path)), settings_bytes=raw
     )
@@ -179,22 +185,23 @@ def clear_thermal_limits(txdevice):
 
 @pytest.fixture(scope="session")
 def variant(txdevice) -> str:
-    """The preset set of a presets-only image ("fda" or "test"), else "standard"."""
-    version = txdevice.get_version()
-    _, plus, suffix = version.partition("+")
-    if not plus:
-        return "standard"
-    if suffix in PRESETS_ONLY:
-        return suffix
-    pytest.skip(f"image reports an unknown build variant ({version})")
+    """"fda" for the clinical (FDA_MODE) image, else "standard": told by its
+    refusal of an (empty) preset write. Nothing is written either way."""
+    r = send_raw(txdevice, OW_CONTROLLER, OW_PRESET_WRITE)
+    assert r is not None, "no reply to a preset write"
+    return "fda" if (r.packet_type, r.reserved) == (OW_ERROR, OW_FDA_REFUSED) else "standard"
 
 
 @pytest.fixture(scope="session")
 def presets_only(txdevice, machine_config, variant):
-    """A presets-only image whose preset 0 is this preset."""
+    """The clinical image, whose preset 0 is this preset."""
     if variant == "standard":
-        pytest.skip("presets-only images only: a standard image refuses none of this")
-    verify_preset(txdevice, PRESET_INDEX, machine_config)
+        pytest.skip("the clinical image only: a standard image refuses none of this")
+    try:
+        verify_preset(txdevice, PRESET_INDEX, machine_config)
+    except Exception as e:
+        pytest.skip(f"slot {PRESET_INDEX} does not hold this preset ({e}): write it through "
+                    "the bootloader (LIFUDFUManager.program_transmitter_preset)")
 
 
 @pytest.fixture(scope="session")
@@ -208,16 +215,15 @@ def standard(variant):
 def preset_in_slot(txdevice, machine_config, standard):
     """A standard image whose slot 0 holds this preset, stored if need be.
 
-    A preset this fixture stored is deleted again at the end of the session:
-    pages 106-125 left written stop a signed image booting under bootloader
-    1.0.1 (#56).
+    A preset this fixture stored is deleted again at the end of the session.
     """
     stored = False
     try:
         verify_preset(txdevice, PRESET_INDEX, machine_config)
     except Exception:
-        if txdevice.get_preset_capacity() is None:
-            pytest.skip("a standard image under the bootloader cannot store presets")
+        capacity = txdevice.get_preset_capacity()
+        if not capacity or capacity["slots"] == 0:
+            pytest.skip("no preset slots: a standard image under a bootloader before 1.1.0-rc.1")
         store_preset(txdevice, PRESET_INDEX, machine_config)
         stored = True
     verify_preset(txdevice, PRESET_INDEX, machine_config)

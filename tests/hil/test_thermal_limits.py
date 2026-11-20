@@ -3,8 +3,8 @@
 start_C, shutoff_C and the treatment timeout are armed by a load or by the
 host, and stay armed through a raw write or an unload. A host set or clear unloads a loaded preset,
 as a raw write does. Armed, they gate START and end a run whether or not a
-preset is loaded. Needs a bare-metal standard image to store the
-preset in slot 0 (conftest.py); skipped on +fda / +test, where
+preset is loaded. Needs a standard image with the preset slots to store
+the preset in slot 0 (conftest.py); skipped on the clinical image, where
 test_preset_refusals.py checks that the host cannot set or clear them.
 
 Keep the console HV off. test_shutoff_stops_a_run needs the TX to warm by a

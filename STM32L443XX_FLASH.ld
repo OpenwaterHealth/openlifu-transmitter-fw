@@ -53,10 +53,6 @@
 ENTRY(Reset_Handler)
 
 /* Specify the memory areas */
-/* FDA builds (CMake: -Wl,--defsym=FDA_MODE=1) link their preset in after the
-   code (.fda_preset below); no other build may have one. */
-FDA_LAYOUT = DEFINED(FDA_MODE) ? FDA_MODE : 0;
-
 MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 48K
@@ -152,18 +148,6 @@ SECTIONS
     . = ALIGN(8);
   } >FLASH
 
-  /* FDA mode's preset (Core/Inc/presets/fda_preset.h), right after the code:
-     inside the signed image, and the rest of the slot stays blank. */
-  .fda_preset :
-  {
-    . = ALIGN(8);
-    _sfda_preset = .;
-    KEEP(*(.fda_preset))
-    . = ALIGN(8);
-  } >FLASH
-  ASSERT(FDA_LAYOUT || SIZEOF(.fda_preset) == 0, "only an FDA_MODE build links a .fda_preset")
-  ASSERT(SIZEOF(.fda_preset) <= 4K, ".fda_preset is over PRESET_BLOB_MAX (4 KB)")
-
   /* used by the startup to initialize data */
   _sidata = LOADADDR(.data);
 
@@ -253,6 +237,16 @@ SECTIONS
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
   } >RAM
+
+  /* SRAM2 (16 KB, not cleared at startup): the preset upload buffer
+     (presets.c), a whole slot collected and checked before it is stored. */
+  .ram2 (NOLOAD) :
+  {
+    . = ALIGN(8);
+    *(.ram2)
+    *(.ram2*)
+    . = ALIGN(8);
+  } >RAM2
 
 
 

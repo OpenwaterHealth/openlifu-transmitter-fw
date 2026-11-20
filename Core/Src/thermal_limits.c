@@ -52,7 +52,7 @@ uint8_t thermal_limits_clear(bool running)
 uint8_t thermal_limits_start_check(bool preset_loaded, bool fresh, float temp_c)
 {
 #ifdef FDA_MODE
-	// A presets-only image starts only what it loaded, under that load's limits.
+	// The clinical image starts only what it loaded, under that load's limits.
 	if (!preset_loaded || limits.source == THERMAL_LIMITS_NONE) return OW_NO_PRESET;
 #else
 	(void)preset_loaded;

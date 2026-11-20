@@ -1,7 +1,7 @@
-"""A presets-only image refuses host writes that would change what a loaded preset runs.
+"""The clinical image refuses host writes that would change what a loaded preset runs.
 
-Needs a +fda or +test image (FDA_MODE); skipped on a standard image
-(conftest.py). Keep the console HV off: nothing here turns HV on.
+Needs the clinical image (FDA_MODE) with this preset in slot 0, written through
+the bootloader; skipped on a standard image (conftest.py). Keep the console HV off: nothing here turns HV on.
 """
 
 import json

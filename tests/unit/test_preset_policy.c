@@ -6,13 +6,14 @@
  * Every (packet type, command, reserved) a host can send is checked against
  * the table below, which is written out by hand: the refusals must be exactly
  * those of the FDA image before the table existed (#40, #34, #43), plus
- * setting or clearing the thermal limits (#59). A +test image
- * (-DFDA_TEST_IMAGE) lets through the signed bootloader's DFU and raw I2C to
- * the module bootloader, but not the ROM loader (SR-021).
+ * setting or clearing the thermal limits (#59), plus storing or deleting a
+ * preset (the presets come signed, through the bootloader). The clinical
+ * image lets through the signed bootloader's DFU and raw I2C to a module
+ * bootloader, so the clinical firmware updater can update it, but not the
+ * ROM loader (SR-021).
  *
- * Built by tests/unit/run.sh standard, with -DFDA_MODE (+fda), and with
- * -DFDA_MODE -DFDA_TEST_IMAGE (+test), as the firmware builds them. Pass
- * --print to list the refusals as well.
+ * Built by tests/unit/run.sh standard and with -DFDA_MODE, as the firmware
+ * builds them. Pass --print to list the refusals as well.
  */
 
 #include "common.h"
@@ -30,11 +31,10 @@ static uint8_t expected_global_refusal(uint8_t command, uint8_t reserved)
 	case OW_CMD_USR_CFG:
 		return (reserved == 1U) ? OW_FDA_REFUSED : OW_SUCCESS;
 	case OW_CMD_DFU:
-#ifdef FDA_TEST_IMAGE
 		return (reserved == 0x77U) ? OW_FDA_REFUSED : OW_SUCCESS;
-#else
-		return OW_FDA_REFUSED;
-#endif
+	case OW_PRESET_WRITE:
+	case OW_PRESET_COMMIT:
+	case OW_PRESET_DELETE:
 	case OW_CTRL_SET_THERMAL_LIMITS:
 	case OW_CTRL_CLEAR_THERMAL_LIMITS:
 		return OW_FDA_REFUSED;
@@ -73,12 +73,7 @@ static uint8_t expected_refusal(uint8_t packet_type, uint8_t command, uint8_t re
 	case OW_ONE_WIRE:
 		return expected_global_refusal(command, reserved);
 	case OW_I2C_PASSTHRU:
-#ifdef FDA_TEST_IMAGE
 		return to_bl ? OW_SUCCESS : OW_FDA_REFUSED;
-#else
-		(void)to_bl;
-		return OW_FDA_REFUSED;
-#endif
 	default:
 		return OW_SUCCESS;
 	}
@@ -158,15 +153,11 @@ int main(int argc, char **argv)
 		check("preset store not a raw write", preset_policy_raw_write(OW_CONTROLLER, store[i]), 0, OW_CONTROLLER, store[i], 0);
 	}
 
-	// SR-021: DFU and raw I2C to the module bootloader. A +fda image refuses
-	// them; a +test image lets the signed bootloader's DFU and the module
-	// bootloader's address through, so a test unit can be updated over USB.
-	// Neither enters the ROM loader or reaches another I2C address.
-#ifdef FDA_TEST_IMAGE
+	// SR-021: the clinical image lets the signed bootloader's DFU and the
+	// module bootloader's address through, so the clinical firmware updater
+	// can update it. It never enters the ROM loader or reaches another I2C
+	// address, and it never stores or deletes a preset itself.
 	const uint8_t dfu_want = OW_SUCCESS;
-#else
-	const uint8_t dfu_want = OW_FDA_REFUSED;
-#endif
 	check("DFU (signed bootloader)", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0, false), dfu_want, OW_CMD, OW_CMD_DFU, 0);
 	check("one-wire DFU", preset_policy_fda_refusal(OW_ONE_WIRE, OW_CMD_DFU, 0, false), dfu_want, OW_ONE_WIRE, OW_CMD_DFU, 0);
 	check("DFU, whatever the I2C flag", preset_policy_fda_refusal(OW_CMD, OW_CMD_DFU, 0, true), dfu_want, OW_CMD, OW_CMD_DFU, 0);
@@ -174,10 +165,8 @@ int main(int argc, char **argv)
 	check("raw I2C to the module bootloader", preset_policy_fda_refusal(OW_I2C_PASSTHRU, 0x01, 4, true), dfu_want, OW_I2C_PASSTHRU, 0x01, 4);
 	check("raw I2C to anything else refused", preset_policy_fda_refusal(OW_I2C_PASSTHRU, 0x01, 2, false), OW_FDA_REFUSED, OW_I2C_PASSTHRU, 0x01, 2);
 
-#if defined(FDA_TEST_IMAGE)
-	const char *build = "FDA (+test)";
-#elif defined(FDA_MODE)
-	const char *build = "FDA (+fda)";
+#if defined(FDA_MODE)
+	const char *build = "FDA";
 #else
 	const char *build = "standard";
 #endif
