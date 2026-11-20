@@ -61,7 +61,7 @@ MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 48K
 RAM2 (xrw)      : ORIGIN = 0x10000000, LENGTH = 16K
-FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = 155K /* SBSFU slot 0x08010000 + 0x400 signed header; slot pages 32-109, presets in 110-125. Install the SIGNED image at 0x08010000. */
+FLASH (rx)      : ORIGIN = 0x08010400, LENGTH = 147K /* SBSFU slot 0x08010000 + 0x400 signed header; slot pages 32-105 (148K), presets in 106-125. Install the SIGNED image at 0x08010000. */
 }
 
 /* Highest address of the user mode stack */

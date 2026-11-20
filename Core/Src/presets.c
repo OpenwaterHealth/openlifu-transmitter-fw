@@ -136,12 +136,12 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 
 #ifndef FDA_MODE
 
-_Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESETS_SIZE,
+_Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESET_STORE_SIZE,
                "the slots must fill the reserved pages exactly");
 
 static uint32_t slot_address(uint8_t slot)
 {
-	return PRESETS_ADDRESS + ((uint32_t)slot * PRESET_SLOT_SIZE);
+	return PRESET_SLOT_ADDRESS(slot);
 }
 
 static uint8_t slots_for(uint32_t len)

@@ -209,7 +209,7 @@ def preset_in_slot(txdevice, machine_config, standard):
     """A standard image whose slot 0 holds this preset, stored if need be.
 
     A preset this fixture stored is deleted again at the end of the session:
-    pages 110-125 left written stop a signed image booting under bootloader
+    pages 106-125 left written stop a signed image booting under bootloader
     1.0.1 (#56).
     """
     stored = False
