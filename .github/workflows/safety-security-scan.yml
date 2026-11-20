@@ -47,7 +47,6 @@ jobs:
                    --suppress=*:Core/Src/system_stm32l4xx.c \
                    --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
-\
                    --suppress=constParameterPointer:Core/Src/tx7332.c:147 \
                    ./Core/Src ./USB_DEVICE/App
 
