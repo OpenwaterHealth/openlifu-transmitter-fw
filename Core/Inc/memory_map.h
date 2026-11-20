@@ -182,6 +182,20 @@
 #define APPLICATION_RUNTIME_CONFIG          ADDR_FLASH_PAGE_127
 #define APPLICATION_RUNTIME_CONFIG_SIZE     ((uint32_t)(ADDR_FLASH_END_ADDRESS - ADDR_FLASH_PAGE_127))
 
+/* The bootloader info block (open-lifu-transmitter-bl bl_info.c, >= 1.1.0-rc.1):
+ * 32 bytes at a fixed address at the end of its vector area, the flash layout
+ * and DFU capabilities it was built with, read as words:
+ *   [0] magic  [1] layout (low half)  [2] slot base  [3] slot end
+ *   [4] preset base  [5] preset size  [6] capabilities  [7] reserved
+ * Older bootloaders have only fill bytes here, so the magic tells them apart. */
+#define BL_INFO_ADDRESS                     ((uint32_t)0x080001E0)
+#define BL_INFO_MAGIC                       ((uint32_t)0x4942574F) // 'OWBI'
+#define BL_INFO_WORD_MAGIC                  0u
+#define BL_INFO_WORD_PRESET_BASE            4u
+#define BL_INFO_WORD_PRESET_SIZE            5u
+#define BL_INFO_WORD_CAPS                   6u
+#define BL_CAP_SIGNED_PRESET_WRITE          ((uint32_t)0x00000002) // preset slots take signed presets
+
 _Static_assert(APPLICATION_ADDRESS + APPLICATION_SLOT_SIZE == PRESET_STORE_ADDRESS,
                "the presets sit right above the slot");
 _Static_assert(PRESET_SLOT_COUNT * PRESET_SLOT_SIZE == PRESET_STORE_SIZE,

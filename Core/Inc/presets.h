@@ -4,26 +4,33 @@
  * Presets the firmware -- not the host -- programs the TX7332 chips from. The
  * host picks one with OW_PRESET_LOAD.
  *
- *   FDA_MODE  the presets-only image (+fda, +test): the presets it runs are
- *             linked into it, so the signature covers them, and nothing in
- *             the image writes them, or the user config. The host may load a
- *             preset and change nothing else: not the
- *             registers, the trigger, the user config or the firmware
- *             (preset_policy.h). Either
- *               one preset, right after the code (the linker scripts'
- *               .fda_preset section), from Core/Inc/presets/fda_preset.h; or
- *               PRESET_TABLE: a set of PRESET_COUNT presets, index i being
- *               the set's i-th, from Core/Inc/presets/preset_table.h (the
- *               SDK's generate_preset_set) and the headers it includes.
- *             CMake picks whichever header the tree has. Flashing or updating
- *             the image writes them.
- *   standard  every other build: presets in pages 106-125, above the
- *             application slot: 10 slots of 4 KB (memory_map.h), slot N being
- *             preset index N; a blob fits one slot. The host also keeps the
- *             registers and the trigger: a raw register, profile or trigger
- *             write leaves nothing loaded on the module that runs it, and is
- *             refused (OW_PRESET_BUSY) while a loaded preset runs or is
- *             paused.
+ * Every build keeps its presets in the preset slots (memory_map.h): pages
+ * 106-125, 10 slots of 4 KB, slot N being preset index N. A slot holds one
+ * signed preset: its PRS1 header (the SFU1 header layout, PRESET_HEADER_LEN
+ * bytes: the blob's size and SHA-256, the diathermy commit and context it
+ * came from, and a signature with the firmware's key), then the PRESET_BLOB.
+ * The presets are not part of the image: the firmware is the same for every
+ * preset set (one image per release).
+ *
+ *   FDA_MODE  the clinical image: it only reads the slots. The host may load a
+ *             preset and change nothing else: not the registers, the trigger,
+ *             the user config or the presets (preset_policy.h). The slots are
+ *             written through the bootloader, which takes only a preset signed
+ *             with its key (open-lifu-transmitter-bl dfu_preset.h).
+ *   standard  every other build (PRESET_STORE): the host may also store and
+ *             delete presets (OW_PRESET_WRITE / COMMIT / DELETE). The app checks
+ *             a stored preset's integrity, not its signature: the host's own
+ *             presets are a research use. It also keeps the registers and the
+ *             trigger: a raw register, profile or trigger write leaves nothing
+ *             loaded on the module that runs it, and is refused
+ *             (OW_PRESET_BUSY) while a loaded preset runs or is paused.
+ *
+ * The slots exist only outside the bootloader's slot: a bare-metal image
+ * always has them; an image under the bootloader has them only if the
+ * bootloader's info block says so (BL_INFO_ADDRESS, open-lifu-transmitter-bl
+ * >= 1.1.0-rc.1). Under an older bootloader every slot reads as empty and a
+ * store is refused, since its slot check would refuse an image with anything
+ * written there.
  *
  * Each module keeps its own load: a raw write to one module's chips unloads
  * that module alone, and OW_PRESET_LOADED then reports nothing loaded. Keeping
@@ -32,13 +39,8 @@
  * handler then rejects has still unloaded: a preset counts as loaded only on
  * the happy path.
  *
- * Only a bare-metal standard image stores presets (PRESET_STORE). Under the
- * bootloader before 1.1.0-rc.1, pages 106-125 are the end of its slot, which it checks are
- * erased at every boot, so a stored preset would stop the image booting; a
- * signed standard image therefore finds every slot empty.
- *
  * A module programs only its own chips, so a preset spanning modules is one
- * blob per module, in that module's own flash, with its own regs_crc.
+ * blob per module, in that module's own slots, with its own regs_crc.
  *
  * OW_PRESET_LOAD requires both CRC-32s (IEEE, zlib-compatible) the host
  * computes, so host and device cannot disagree about what preset N runs:
@@ -55,16 +57,15 @@
  * FDA_MODE image's trigger does not start; a standard image's runs on the
  * host's own configuration, under whatever limits are armed.
  *
- * A stored upload is staged in RAM and written only once all of it has
- * arrived and checks out; its magic is programmed last, so a write cut short
- * leaves a slot that reads as empty.
+ * A stored upload is collected in RAM (SRAM2) and checked whole before its
+ * slot is touched; the header's first doubleword (the magic) is programmed
+ * last, so a write cut short leaves a slot that reads as empty.
  */
 
 #ifndef INC_PRESETS_H_
 #define INC_PRESETS_H_
 
-// USER_VECT_TAB_ADDRESS is set for every image that runs under the bootloader.
-#if !defined(FDA_MODE) && !defined(USER_VECT_TAB_ADDRESS)
+#ifndef FDA_MODE
 #define PRESET_STORE
 #endif
 
@@ -114,19 +115,14 @@
 #define PRESET_BLOB_VERSION 2u
 
 // The slots are fixed in the flash map (memory_map.h PRESET_SLOT_*).
-#define PRESET_SLOTS       PRESET_SLOT_COUNT
-#define PRESET_BLOB_MAX    PRESET_SLOT_SIZE            // a blob fits one slot
+#define PRESET_SLOTS       PRESET_SLOT_COUNT           // memory_map.h: the slots are fixed
+#define PRESET_COUNT       PRESET_SLOTS
+// A slot: the PRS1 header, then the blob.
+#define PRESET_HEADER_LEN  0x140u
+#define PRESET_HEADER_MAGIC "PRS1"
+#define PRESET_BLOB_MAX    (PRESET_SLOT_SIZE - PRESET_HEADER_LEN)
 
-// Preset indexes: a standard image has every slot; FDA mode runs the presets linked in,
-// one from fda_preset.h, or as many as the generated preset_table.h defines.
-#ifndef FDA_MODE
-#define PRESET_COUNT PRESET_SLOTS
-#elif !defined(PRESET_TABLE)
-#define PRESET_COUNT 1u
-#endif
-
-// Where one preset's blob is, and how long. preset_table.h lists the linked
-// set as these.
+// Where one preset's blob is, and how long.
 typedef struct {
 	const uint8_t *data;
 	uint32_t len;
@@ -173,10 +169,20 @@ typedef struct {
 /** Number of preset indexes, PRESET_COUNT. */
 uint8_t presets_count(void);
 
+/** Does this image have the preset slots (see above)? */
+bool presets_have_slots(void);
+
+/**
+ * @brief  The PRS1 header of the preset in a slot (PRESET_HEADER_LEN bytes),
+ *         for the host to check its signature and provenance (OW_PRESET_INFO).
+ * @return NULL if the slot holds no preset.
+ */
+const uint8_t *presets_header(uint8_t slot);
+
 /**
  * @brief  What a preset index holds.
- * @return OW_SUCCESS if it heads a blob, else OW_PRESET_EMPTY,
- *         OW_PRESET_SLOT_TAIL, or OW_INVALID_PACKET past the last index.
+ * @return OW_SUCCESS if it holds a preset, else OW_PRESET_EMPTY, or
+ *         OW_INVALID_PACKET past the last index.
  */
 uint8_t presets_slot_state(uint8_t slot);
 
@@ -293,34 +299,33 @@ uint8_t presets_shutoff_check(void);
 
 #ifdef PRESET_STORE
 
-/** Slots that hold nothing: neither a preset nor the second half of one. */
+/** Slots that hold nothing. */
 uint8_t presets_free_slots(void);
 
 /**
- * @brief  Take the next part of an upload for a slot. Offset 0 starts one;
- *         later parts must follow on from the last, for the same slot.
+ * @brief  Take the next part of an upload for a slot: the slot's image, the
+ *         PRS1 header then the blob. Offset 0 starts one; later parts must
+ *         follow on from the last, for the same slot.
  * @return OW_SUCCESS, or OW_INVALID_PACKET, which also abandons the upload.
  */
 uint8_t presets_stage(uint8_t slot, uint32_t offset, const uint8_t *data, uint16_t len);
 
 /**
- * @brief  Store the uploaded blob in its slot, replacing what was there.
- *
+ * @brief  Store the uploaded slot image, replacing what was there.
  * Refused, with nothing changed, unless the upload is total_len bytes with
- * CRC-32 blob_crc, is a well-formed PRESET_BLOB whose body matches its
- * regs_crc, and fits: a blob longer than one slot needs the next slot to be
- * free or already its own.
- *
- * @return OW_SUCCESS, OW_INVALID_PACKET, OW_BAD_CRC, OW_PRESET_SLOT_TAIL,
- *         OW_PRESET_NO_ROOM, OW_PRESET_BUSY, or OW_UNKNOWN_ERROR if the flash
- *         write failed (the slot is then empty).
+ * CRC-32 image_crc, starts with a PRS1 header whose size is the blob's, and
+ * the blob is a well-formed PRESET_BLOB whose body matches its regs_crc. The
+ * signature is not checked here (see above).
+ * @return OW_SUCCESS, OW_INVALID_PACKET, OW_BAD_CRC, OW_PRESET_NO_ROOM (no
+ *         preset slots, see above), OW_PRESET_BUSY, or OW_UNKNOWN_ERROR if the
+ *         flash write failed (the slot is then empty).
  */
-uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc);
+uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t image_crc);
 
 /**
  * @brief  Empty a slot. Already empty is not an error.
- * @return OW_SUCCESS, OW_INVALID_PACKET, OW_PRESET_SLOT_TAIL, OW_PRESET_BUSY,
- *         or OW_UNKNOWN_ERROR if the erase failed.
+ * @return OW_SUCCESS, OW_INVALID_PACKET, OW_PRESET_NO_ROOM (no preset slots),
+ *         OW_PRESET_BUSY, or OW_UNKNOWN_ERROR if the erase failed.
  */
 uint8_t presets_delete(uint8_t slot);
 

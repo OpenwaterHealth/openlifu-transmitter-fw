@@ -1,7 +1,7 @@
 /*
  * preset_policy.h
  *
- * Which host commands a presets-only image (FDA_MODE) refuses, and which
+ * Which host commands the clinical image (FDA_MODE) refuses, and which
  * ones change what a loaded preset runs. Pure: no HAL, no device state, so
  * the tables can be tested on the host (tests/unit). A standard image runs
  * them all: a raw write there leaves nothing loaded, or is refused with
@@ -19,7 +19,7 @@
  *         registers, the delay or pattern profiles, the profile cycle or the
  *         trigger timing?
  *
- * A presets-only image refuses them: they belong to the loaded preset. A
+ * The clinical image refuses them: they belong to the loaded preset. A
  * standard image runs them and leaves nothing loaded, so the device never
  * reports a preset the chips no longer hold.
  */
@@ -29,19 +29,21 @@ bool preset_policy_raw_write(uint8_t packet_type, uint8_t command);
 #define PRESET_POLICY_DFU_ROM_LOADER 0x77U
 
 /**
- * @brief  Does a presets-only image refuse this command?
+ * @brief  Does the clinical image refuse this command?
  *
- * A +fda image refuses DFU and raw I2C outright. A +test image
- * (FDA_TEST_IMAGE) lets through the signed bootloader's DFU and raw I2C to
- * a module bootloader, so a unit on the test presets can be updated over
- * USB; it still refuses the STM32 ROM loader, which takes unsigned images.
+ * It lets through the signed bootloader's DFU and raw I2C to a module
+ * bootloader, so the clinical firmware updater can update the firmware and
+ * the presets (each bootloader takes only what is signed with its key). It
+ * refuses the STM32 ROM loader, which takes unsigned images, and storing or
+ * deleting a preset itself: the presets come signed, through the bootloader.
  *
  * @param  to_module_bootloader  for OW_I2C_PASSTHRU: the packet's I2C
  *         address is a module bootloader's (the caller knows which modules
  *         are in their bootloader; module_manager.h). Ignored otherwise.
  * @return OW_SUCCESS if it allows it, else the OW_ERROR reply's code:
  *         OW_INVALID_PACKET for a raw write, OW_FDA_REFUSED for the rest
- *         (user config write, DFU, raw I2C, setting or clearing the thermal
+ *         (user config write, ROM-loader DFU, raw I2C to anything but a module
+ *         bootloader, a preset store or delete, setting or clearing the thermal
  *         limits).
  */
 uint8_t preset_policy_fda_refusal(uint8_t packet_type, uint8_t command, uint8_t reserved,

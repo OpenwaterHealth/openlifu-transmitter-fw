@@ -1,7 +1,8 @@
 """A standard image's preset slots, and the host's own control beside them.
 
-Needs a bare-metal standard image (no version suffix) to store the preset in
-slot 0 (conftest.py); skipped on +fda / +test. There is no runtime lock: a
+Needs a standard image with the preset slots (bare-metal, or under transmitter
+bootloader >= 1.1.0-rc.1) to store the preset in slot 0 (conftest.py); skipped
+on the clinical image. There is no runtime lock: a
 raw register, profile or trigger write goes through and leaves nothing loaded,
 unless a loaded preset is running. Keep the console HV off.
 """

@@ -206,6 +206,9 @@ void SystemInit(void)
 #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
   SCB->CPACR |= ((3UL << 20U)|(3UL << 22U));  /* set CP10 and CP11 Full Access */
 #endif
+#ifdef BARE_METAL
+  /* A bare-metal image's DFU (main.c): the STM32 ROM loader. Only a bare-metal
+   * image has this jump; under the secure bootloader it is not built in. */
   if ( *((unsigned long *)0x20003FF0) == 0xDEADBEEF ) {
      *((unsigned long *)0x20003FF0) =  0xCAFEFEED; // Reset our trigger
      __disable_irq(); // Disable all global interrupts
@@ -233,6 +236,7 @@ void SystemInit(void)
     SysMemBootJump();
     while (1);
   }
+#endif /* BARE_METAL */
 }
 
 /**
