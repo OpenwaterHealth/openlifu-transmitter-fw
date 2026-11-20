@@ -182,6 +182,23 @@ static void onewire_abort_rx(UART_HandleTypeDef *huart)
     }
 }
 
+/* Before arming a one-wire receive: abort one still armed, then clear any error
+ * a late reply left behind. A reply that arrives after its receive was aborted
+ * on timeout overruns the receiver (ORE). That is the normal end of a discovery
+ * walk: the master and a relaying slave use the same ONEWIRE_TIMEOUT, so the
+ * slave's end-of-chain reply to the master's last discovery always arrives just
+ * after the master gave up. With ORE pending, HAL_UARTEx_ReceiveToIdle_IT aborts
+ * the reception at once and returns HAL_ERROR, which ended in Error_Handler():
+ * the master's next discovery walk (the first runtime OW_CTRL_ENUMERATE after
+ * boot) hung it until its watchdog reset it. */
+static void onewire_prepare_rx(UART_HandleTypeDef *huart)
+{
+    onewire_abort_rx(huart);
+    __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF |
+                                 UART_CLEAR_FEF | UART_CLEAR_IDLEF);
+    __HAL_UART_SEND_REQ(huart, UART_RXDATA_FLUSH_REQUEST);
+}
+
 static void onewire_abort_tx(UART_HandleTypeDef *huart)
 {
     if (huart->gState != HAL_UART_STATE_READY)
@@ -352,7 +369,7 @@ static void comms_callout_onewire_receive(UartPacket* pRetPacket)
     rx_ow_callout_flag = 0;  // Ensure rx_ow_callout_flag is declared as volatile
 
     // Enable receiver in half-duplex mode
-    onewire_abort_rx(&CALL_OUT_UART);
+    onewire_prepare_rx(&CALL_OUT_UART);
     if(HAL_HalfDuplex_EnableReceiver(&CALL_OUT_UART) != HAL_OK) {
         // Receive Error
         Error_Handler();
@@ -596,7 +613,7 @@ NextOneWirePacket:
 	}
 	memset(owRxBuffer, 0, sizeof(owRxBuffer));
     rx_ow_callin_flag = 0;
-    onewire_abort_rx(&CALL_IN_UART);
+    onewire_prepare_rx(&CALL_IN_UART);
     if(HAL_HalfDuplex_EnableReceiver(&CALL_IN_UART) != HAL_OK) {
     	// Receive Error
 		Error_Handler();
