@@ -70,21 +70,21 @@ enable_language(C ASM)
 # Bare-metal build option (mirrors openlifu-console-fw):
 #   BARE_METAL=OFF (default) : image runs under the SBSFU secure bootloader from
 #                              the active slot — FLASH origin=0x08010400,
-#                              LENGTH=147K, VTOR=0x08010400 (slot + signed-header
+#                              LENGTH=127K, VTOR=0x08010400 (slot + signed-header
 #                              offset; uses STM32L443XX_FLASH.ld). This is the
 #                              image that gets signed.
-#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=212K, no
+#   BARE_METAL=ON            : standalone image at 0x08000000, LENGTH=192K, no
 #                              bootloader (uses STM32L443RCIX_FLASH.ld).
 option(BARE_METAL "Build a bare-metal image (no bootloader; runs at 0x08000000)" OFF)
 
 if(BARE_METAL)
-    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=212K")
+    message(STATUS "Bare-metal build : FLASH origin=0x08000000, LENGTH=192K")
     # The sources tell the builds apart too (OW_CMD_SIGCHK). Directory-wide,
     # so the CubeMX sources added below see it as well.
     add_compile_definitions(BARE_METAL)
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443RCIX_FLASH.ld")
 else()
-    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=147K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
+    message(STATUS "Bootloader build : FLASH origin=0x08010400, LENGTH=127K, VTOR=0x08010400 (SBSFU slot + signed-header offset)")
     set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32L443XX_FLASH.ld")
 endif()
 

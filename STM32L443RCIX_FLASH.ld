@@ -47,7 +47,7 @@ MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 48K
   RAM2    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 16K
-  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 212K /* pages 0-105, below the presets, the anti-rollback page and the runtime config */
+  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 192K /* pages 0-95, below the presets, the anti-rollback page and the runtime config */
 }
 
 /* Sections */

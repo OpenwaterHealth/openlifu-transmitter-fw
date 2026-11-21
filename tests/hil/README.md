@@ -20,7 +20,7 @@ Name the preset the tests use, one way or the other:
 Without either, the preset tests skip; without a transmitter on USB, every test
 skips. `--rootdir .` keeps pytest from taking the rootdir from the preset path.
 
-Every image reads its presets from the preset slots (pages 106-125, 10 slots of
+Every image reads its presets from the preset slots (pages 96-125, 15 slots of
 4 KB, each a signed `PRS1` header then the blob). A standard image stores a
 preset in slot 0 itself, which needs the slots: a bare-metal image
 (`Release-BareMetal`), or one under transmitter bootloader >= 1.1.0-rc.1. The

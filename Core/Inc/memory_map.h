@@ -149,10 +149,10 @@
  * (open-lifu-transmitter-bl): change both together.
  *
  *   pages   0- 31  0x08000000  secure bootloader (64 KB)
- *   pages  32-105  0x08010000  application slot (148 KB): signed header, then
+ *   pages  32- 95  0x08010000  application slot (128 KB): signed header, then
  *                              the image at +0x400
- *   pages 106-125  0x08035000  presets (40 KB, presets.h): 10 slots of 4 KB
- *                              (two pages), preset N at 0x08035000 + N x 0x1000
+ *   pages  96-125  0x08030000  presets (60 KB, presets.h): 15 slots of 4 KB
+ *                              (two pages), preset N at 0x08030000 + N x 0x1000
  *   page      126  0x0803F000  the bootloader's anti-rollback version log
  *   page      127  0x0803F800  runtime config (lifu_config.h)
  *
@@ -167,12 +167,12 @@
 #define BOOTLOADER_ADDRESS                  ADDR_FLASH_PAGE_0
 #define APPLICATION_ADDRESS                 ADDR_FLASH_PAGE_32 // slot start: signed header
 #define APPLICATION_IMAGE_OFFSET            ((uint32_t)0x400)  // the image runs at the slot start + 0x400
-#define APPLICATION_SLOT_SIZE               ((uint32_t)(ADDR_FLASH_PAGE_106 - ADDR_FLASH_PAGE_32))
+#define APPLICATION_SLOT_SIZE               ((uint32_t)(ADDR_FLASH_PAGE_96 - ADDR_FLASH_PAGE_32))
 #define APPLICATION_MAX_SIZE                (APPLICATION_SLOT_SIZE - APPLICATION_IMAGE_OFFSET)
-#define PRESET_STORE_ADDRESS                ADDR_FLASH_PAGE_106
-#define PRESET_STORE_SIZE                   ((uint32_t)(ADDR_FLASH_PAGE_126 - ADDR_FLASH_PAGE_106))
-#define PRESET_SLOT_SIZE                    ((uint32_t)(ADDR_FLASH_PAGE_108 - ADDR_FLASH_PAGE_106)) // 4 KB
-#define PRESET_SLOT_COUNT                   10u
+#define PRESET_STORE_ADDRESS                ADDR_FLASH_PAGE_96
+#define PRESET_STORE_SIZE                   ((uint32_t)(ADDR_FLASH_PAGE_126 - ADDR_FLASH_PAGE_96))
+#define PRESET_SLOT_SIZE                    ((uint32_t)(ADDR_FLASH_PAGE_98 - ADDR_FLASH_PAGE_96)) // 4 KB
+#define PRESET_SLOT_COUNT                   15u
 #define PRESET_SLOT_ADDRESS(n)              (PRESET_STORE_ADDRESS + ((uint32_t)(n) * PRESET_SLOT_SIZE))
 // Anti-rollback version log: the secure bootloader's (its MEM_ANTIROLLBACK_BASE).
 // The application must never write or erase it.

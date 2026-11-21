@@ -32,7 +32,7 @@
             "name": "Debug-BareMetal",
             "inherits": "default",
             "displayName": "Debug (Bare metal)",
-            "description": "Standalone debug build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 106-125.",
+            "description": "Standalone debug build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 96-125.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "BARE_METAL": "ON"
@@ -42,7 +42,7 @@
             "name": "Release-BareMetal",
             "inherits": "default",
             "displayName": "Release (Bare metal)",
-            "description": "Standalone release build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 106-125.",
+            "description": "Standalone release build, no bootloader: FLASH @ 0x08000000. Stores presets in pages 96-125.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "BARE_METAL": "ON"
@@ -52,7 +52,7 @@
             "name": "Debug-FDA",
             "inherits": "default",
             "displayName": "Debug (FDA mode)",
-            "description": "Clinical image: reads its presets from the preset slots (pages 106-125, written signed through the bootloader) and refuses host writes: registers, profiles, trigger, user config, presets. The same firmware as the standard build of a release, same version.",
+            "description": "Clinical image: reads its presets from the preset slots (pages 96-125, written signed through the bootloader) and refuses host writes: registers, profiles, trigger, user config, presets. The same firmware as the standard build of a release, same version.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "FDA_MODE": "ON"
@@ -62,7 +62,7 @@
             "name": "Release-FDA",
             "inherits": "default",
             "displayName": "Release (FDA mode)",
-            "description": "Clinical image: reads its presets from the preset slots (pages 106-125, written signed through the bootloader) and refuses host writes: registers, profiles, trigger, user config, presets. The same firmware as the standard build of a release, same version.",
+            "description": "Clinical image: reads its presets from the preset slots (pages 96-125, written signed through the bootloader) and refuses host writes: registers, profiles, trigger, user config, presets. The same firmware as the standard build of a release, same version.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "FDA_MODE": "ON"
