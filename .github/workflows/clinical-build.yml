@@ -58,7 +58,7 @@ env:
   BL_REPO: open-lifu-transmitter-bl
   # Clinical bootloader to bundle (the workflow_dispatch input overrides it): a
   # tag whose clinical build is in the bucket under open-lifu-transmitter-bl/<tag>/.
-  BL_RELEASE: "1.1.0-rc.1"
+  BL_RELEASE: "1.1.0-rc.2"
   # openlifu-sdk release holding the Cloud KMS signer (LIFUCrypto --kms-key).
   SDK_RELEASE: "2.1.0-rc.7"
   GCS_BUCKET: openwater-firmware-artifacts
