@@ -225,8 +225,8 @@ int main(void)
 	uint32_t len = make_image(image, FDA_PRESET_BLOB, sizeof FDA_PRESET_BLOB);
 	memset(flash, 0xFF, sizeof flash);
 
-	CHECK(presets_count() == 10U && PRESET_SLOT_SIZE == 4096U && PRESET_BLOB_MAX == 3776U,
-	      "10 slots of 4 KB");
+	CHECK(presets_count() == 15U && PRESET_SLOT_SIZE == 4096U && PRESET_BLOB_MAX == 3776U,
+	      "15 slots of 4 KB");
 	check_empty("erased flash");
 
 #ifdef BARE_METAL

@@ -5,7 +5,7 @@
  * host picks one with OW_PRESET_LOAD.
  *
  * Every build keeps its presets in the preset slots (memory_map.h): pages
- * 106-125, 10 slots of 4 KB, slot N being preset index N. A slot holds one
+ * 96-125, 15 slots of 4 KB, slot N being preset index N. A slot holds one
  * signed preset: its PRS1 header (the SFU1 header layout, PRESET_HEADER_LEN
  * bytes: the blob's size and SHA-256, the diathermy commit and context it
  * came from, and a signature with the firmware's key), then the PRESET_BLOB.

@@ -8,7 +8,7 @@ image was built with -- one preset file, or a whole preset context:
 
 Skipped unless one is given and a transmitter answers on USB.
 
-Every image reads its presets from the preset slots (pages 106-125). The
+Every image reads its presets from the preset slots (pages 96-125). The
 clinical (FDA_MODE) image cannot store one: its slot 0 must already hold this
 preset, written through the bootloader (openlifu-sdk
 LIFUDFUManager.program_transmitter_preset). On a standard image the tests store
