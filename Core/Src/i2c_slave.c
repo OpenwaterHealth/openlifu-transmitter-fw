@@ -170,6 +170,8 @@ static uint8_t slave_packet_type_for(uint8_t command)
 	case OW_CTRL_GET_PATTERN_PROFILE:
 	case OW_CTRL_ARM_PROFILE_CYCLE:
 		return OW_CONTROLLER;
+	case OW_CMD_BL_VERSION:   // a global command outside 0x00-0x0F
+		return OW_CMD;
 	default:
 		break;
 	}

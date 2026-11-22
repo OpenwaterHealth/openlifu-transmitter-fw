@@ -135,6 +135,8 @@ int main(int argc, char **argv)
 	check("PRESET_LOADED open", preset_policy_fda_refusal(OW_CONTROLLER, OW_PRESET_LOADED, 0, false), OW_SUCCESS, OW_CONTROLLER, OW_PRESET_LOADED, 0);
 	check("USR_CFG read open", preset_policy_fda_refusal(OW_CMD, OW_CMD_USR_CFG, 0, false), OW_SUCCESS, OW_CMD, OW_CMD_USR_CFG, 0);
 	check("TX7332 read open", preset_policy_fda_refusal(OW_TX7332, OW_TX7332_RREG, 0, false), OW_SUCCESS, OW_TX7332, OW_TX7332_RREG, 0);
+	// SR-021: the host reads the bootloader's version to update it.
+	check("BL_VERSION open", preset_policy_fda_refusal(OW_CMD, OW_CMD_BL_VERSION, 0, false), OW_SUCCESS, OW_CMD, OW_CMD_BL_VERSION, 0);
 	check("ARM_PROFILE_CYCLE not a host write", preset_policy_raw_write(OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE), 0, OW_CONTROLLER, OW_CTRL_ARM_PROFILE_CYCLE, 0);
 	// The thermal limits are the linked preset's in FDA_MODE: the host may read
 	// them only. In a standard image setting them is not in the raw-write
