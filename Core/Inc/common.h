@@ -23,6 +23,11 @@
 #define SIGCHK_BARE_METAL  0x01U   /* no bootloader, so no signed header */
 #define SIGCHK_HEADER_LEN  320U    /* sizeof(SE_FwRawHeaderTypeDef) */
 
+/* OW_CMD_BL_VERSION reply payload: the installed bootloader's version, the
+ * ASCII text after "OW DFU " (its USB product string) in bootloader flash,
+ * no NUL. Empty when there is no bootloader (bare metal) or none is found. */
+#define BL_VERSION_MAX_LEN 32U
+
 // Configuration: each module has two transmitters; adjust as necessary.
 #define TX_PER_MODULE 2
 #define MAX_MODULES   6  // Total number of modules (master + slaves)
@@ -110,6 +115,8 @@ typedef enum {
 	OW_CMD_DFU = 0x0D,
 	OW_CMD_NOP = 0x0E,
 	OW_CMD_RESET = 0x0F,
+	OW_CMD_BL_VERSION = 0x70,  // the bootloader's version text (BL_VERSION_MAX_LEN), or
+	                           //   none; 0x70 is clear of every other block
 } UstxGlobalCommands;
 
 // Node operating mode reported in the OW_CMD_DISCOVERY response payload (data[0]).

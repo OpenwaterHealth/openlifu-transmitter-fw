@@ -38,6 +38,7 @@ extern bool async_enabled;
 
 static uint32_t id_words[3] = {0};
 static uint8_t sigchk_reply[1U + SIGCHK_HEADER_LEN];   // OW_CMD_SIGCHK
+static uint8_t bl_version[BL_VERSION_MAX_LEN];         // OW_CMD_BL_VERSION
 static char retTriggerJson[0xFF];
 static uint8_t module_count = 0;
 static uint8_t node_mode_byte = NODE_MODE_APP;   // this node runs application firmware
@@ -189,6 +190,77 @@ void reset_profile_cycle_to_start(void)
 
 	profile_cycle.current_exec_index = 0;
 	apply_next_profile_in_cycle();
+}
+
+#ifndef BARE_METAL
+// A character of the bootloader's version text ("1.1.0", "1.1.0-rc.3").
+static bool bl_version_char(uint8_t c)
+{
+	return (c >= (uint8_t)'0' && c <= (uint8_t)'9') || (c >= (uint8_t)'A' && c <= (uint8_t)'Z') ||
+	       (c >= (uint8_t)'a' && c <= (uint8_t)'z') || c == (uint8_t)'.' || c == (uint8_t)'+' ||
+	       c == (uint8_t)'-';
+}
+
+// Find the bootloader's USB product string, "OW DFU " FW_VERSION
+// (open-lifu-transmitter-bl usbd_desc.c), in its flash, and copy the version
+// after it to out. A clinical bootloader's PCROP area (the key) reads as zero
+// and sets RDERR, so it is skipped: its bounds are double-word offsets from
+// the flash base (FLASH->PCROP1SR/ER), and it is set when start <= end.
+// Returns the version's length, 0 if there is none.
+static uint16_t bl_version_scan(uint8_t *out, uint16_t max)
+{
+	static const char marker[] = "OW DFU ";
+	const uint32_t marker_len = (uint32_t)sizeof(marker) - 1U;
+	const uint32_t strt = FLASH->PCROP1SR & FLASH_PCROP1SR_PCROP1_STRT;
+	const uint32_t end = FLASH->PCROP1ER & FLASH_PCROP1ER_PCROP1_END;
+	uint32_t pcrop_lo = 1U, pcrop_hi = 0U;   // none: lo > hi
+	if (strt <= end) {
+		pcrop_lo = FLASH_BASE + (strt << 3);
+		pcrop_hi = FLASH_BASE + (end << 3) + 7U;
+	}
+
+	uint16_t len = 0U;
+	uint32_t matched = 0U;
+	for (uint32_t a = BOOTLOADER_ADDRESS; a < APPLICATION_ADDRESS && len < max; a++) {
+		if (a >= pcrop_lo && a <= pcrop_hi) {
+			if (len > 0U) break;
+			a = pcrop_hi;
+			matched = 0U;
+			continue;
+		}
+		const uint8_t c = *(const volatile uint8_t *)a;
+		if (matched < marker_len) {
+			// 'O' is in the marker only once, so a mismatch restarts it.
+			matched = (c == (uint8_t)marker[matched]) ? matched + 1U : ((c == (uint8_t)marker[0]) ? 1U : 0U);
+		} else if (bl_version_char(c)) {
+			out[len++] = c;
+		} else if (len > 0U) {
+			break;
+		} else {
+			matched = (c == (uint8_t)marker[0]) ? 1U : 0U;   // the marker with no version
+		}
+	}
+	if (__HAL_FLASH_GET_FLAG(FLASH_FLAG_RDERR)) __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_RDERR);
+	return len;
+}
+#endif
+
+// The bootloader's version for OW_CMD_BL_VERSION, in bl_version: scanned for
+// once, as the bootloader does not change while the application runs. A
+// bare-metal image has no bootloader.
+static uint16_t bl_version_get(void)
+{
+#ifdef BARE_METAL
+	return 0U;
+#else
+	static bool scanned = false;
+	static uint16_t len = 0U;
+	if (!scanned) {
+		len = bl_version_scan(bl_version, (uint16_t)sizeof(bl_version));
+		scanned = true;
+	}
+	return len;
+#endif
 }
 
 static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
@@ -840,6 +912,22 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uartResp->data_len = sizeof(sigchk_reply);
 #endif
 				uartResp->data = sigchk_reply;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
+			}
+			break;
+		case OW_CMD_BL_VERSION:
+			// The installed bootloader's version (SR-021), so the host learns
+			// it without entering DFU. Empty if none is found.
+			cmd->data_len = BL_VERSION_MAX_LEN; //passing amount to read if forwarding to slave
+			if (module_id == 0x00)
+			{
+				uartResp->id = cmd->id;
+				uartResp->command = cmd->command;
+				uartResp->reserved = cmd->reserved;
+				uartResp->addr = cmd->addr;
+				uartResp->data_len = bl_version_get();
+				uartResp->data = bl_version;
 			} else {
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
