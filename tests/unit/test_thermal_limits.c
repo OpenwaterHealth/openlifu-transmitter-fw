@@ -85,7 +85,7 @@ static void test_load_arms_and_outlasts_the_load(void)
 
 	// A raw write (or an unload) leaves the preset unloaded: the gate holds.
 #ifdef FDA_MODE
-	// ...except that a presets-only image does not start without a load.
+	// ...except that the clinical image does not start without a load.
 	CHECK(thermal_limits_start_check(false, true, 20.0f) == OW_NO_PRESET);
 #else
 	test_start_check_with_limits(false);

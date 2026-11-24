@@ -167,6 +167,46 @@ static void comms_interface_send(const UartPacket* pResp)
     }
 }
 
+/* A one-wire transfer that times out leaves its HAL operation armed (RxState or
+ * gState busy). Arming the next transfer on that UART then fails with HAL_BUSY,
+ * which ended in Error_Handler(): a configured slave relaying a discovery for the
+ * second time (the walk of a runtime OW_CTRL_ENUMERATE; the boot walk relays only
+ * once) hung there with interrupts masked until the watchdog reset it, and it came
+ * back unconfigured and unreachable (openlifu-transmitter-fw#80). Abort what a
+ * timed-out transfer left armed, when it times out and again before arming. */
+static void onewire_abort_rx(UART_HandleTypeDef *huart)
+{
+    if (huart->RxState != HAL_UART_STATE_READY)
+    {
+        (void)HAL_UART_AbortReceive(huart);
+    }
+}
+
+/* Before arming a one-wire receive: abort one still armed, then clear any error
+ * a late reply left behind. A reply that arrives after its receive was aborted
+ * on timeout overruns the receiver (ORE). That is the normal end of a discovery
+ * walk: the master and a relaying slave use the same ONEWIRE_TIMEOUT, so the
+ * slave's end-of-chain reply to the master's last discovery always arrives just
+ * after the master gave up. With ORE pending, HAL_UARTEx_ReceiveToIdle_IT aborts
+ * the reception at once and returns HAL_ERROR, which ended in Error_Handler():
+ * the master's next discovery walk (the first runtime OW_CTRL_ENUMERATE after
+ * boot) hung it until its watchdog reset it. */
+static void onewire_prepare_rx(UART_HandleTypeDef *huart)
+{
+    onewire_abort_rx(huart);
+    __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF |
+                                 UART_CLEAR_FEF | UART_CLEAR_IDLEF);
+    __HAL_UART_SEND_REQ(huart, UART_RXDATA_FLUSH_REQUEST);
+}
+
+static void onewire_abort_tx(UART_HandleTypeDef *huart)
+{
+    if (huart->gState != HAL_UART_STATE_READY)
+    {
+        (void)HAL_UART_AbortTransmit(huart);
+    }
+}
+
 static bool comms_callout_onewire_send(UartPacket* pResp)
 {
     uint32_t start_time = 0;
@@ -212,6 +252,7 @@ static bool comms_callout_onewire_send(UartPacket* pResp)
     // printBuffer(owTxBuffer, pResp->data_len + 12);
 
     /* Enable the transmitter in half-duplex mode */
+    onewire_abort_tx(&CALL_OUT_UART);
     if(HAL_HalfDuplex_EnableTransmitter(&CALL_OUT_UART) != HAL_OK)
     {
         /* Setup Error */
@@ -231,7 +272,8 @@ static bool comms_callout_onewire_send(UartPacket* pResp)
     while(!tx_ow_callout_flag)
     {
         if ((HAL_GetTick() - start_time) >= ONEWIRE_TIMEOUT)
-        {;
+        {
+            onewire_abort_tx(&CALL_OUT_UART);
             return false;  // Timeout occurred
         }
         // Optionally add a small delay here to yield CPU time.
@@ -286,6 +328,7 @@ static bool comms_callin_onewire_send(UartPacket* pResp)
     // printBuffer(owTxBuffer, pResp->data_len + 12);
 
     /* Enable the transmitter in half-duplex mode */
+    onewire_abort_tx(&CALL_IN_UART);
     if(HAL_HalfDuplex_EnableTransmitter(&CALL_IN_UART) != HAL_OK)
     {
         /* Setup Error */
@@ -306,6 +349,7 @@ static bool comms_callin_onewire_send(UartPacket* pResp)
     {
         if ((HAL_GetTick() - start_time) >= ONEWIRE_TIMEOUT)
         {
+            onewire_abort_tx(&CALL_IN_UART);
             return false;  // Timeout occurred
         }
         // Optionally add a small delay here to yield CPU time.
@@ -325,6 +369,7 @@ static void comms_callout_onewire_receive(UartPacket* pRetPacket)
     rx_ow_callout_flag = 0;  // Ensure rx_ow_callout_flag is declared as volatile
 
     // Enable receiver in half-duplex mode
+    onewire_prepare_rx(&CALL_OUT_UART);
     if(HAL_HalfDuplex_EnableReceiver(&CALL_OUT_UART) != HAL_OK) {
         // Receive Error
         Error_Handler();
@@ -340,6 +385,7 @@ static void comms_callout_onewire_receive(UartPacket* pRetPacket)
     start_time = HAL_GetTick();
     while(!rx_ow_callout_flag) {
         if ((HAL_GetTick() - start_time) >= ONEWIRE_TIMEOUT) {
+            onewire_abort_rx(&CALL_OUT_UART);
             pRetPacket->packet_type = OW_TIMEOUT;
             pRetPacket->data_len = 0;
             return;  // Timeout occurred
@@ -567,6 +613,7 @@ NextOneWirePacket:
 	}
 	memset(owRxBuffer, 0, sizeof(owRxBuffer));
     rx_ow_callin_flag = 0;
+    onewire_prepare_rx(&CALL_IN_UART);
     if(HAL_HalfDuplex_EnableReceiver(&CALL_IN_UART) != HAL_OK) {
     	// Receive Error
 		Error_Handler();

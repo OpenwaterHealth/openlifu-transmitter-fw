@@ -8,6 +8,8 @@
 #ifndef INC_MEMORY_MAP_H_
 #define INC_MEMORY_MAP_H_
 
+#include <stdint.h>
+
 #ifdef __cplusplus
  extern "C" {
 #endif
@@ -142,18 +144,68 @@
  #define ADDR_FLASH_PAGE_127   ((uint32_t)0x0803F800) /* Base @ of Page 127, 2 Kbytes */
  #define ADDR_FLASH_END_ADDRESS ((uint32_t)0x08040000) /* END OF FLASH */
 
-#define FLASH_START_ADDRESS        			((uint32_t)0x08000000)
-#define APPLICATION_ADDRESS        			((uint32_t)0x08010000) // application slot, pages 32-109: signed header, then the image at +0x400
-#define APPLICATION_MAX_SIZE                ((uint32_t)(156U * 1024U))
-#define APPLICATION_USER_CONFIG    			((uint32_t)0x0803F800) // 2 KB user config region (page 127, end of flash), application use only -- not writable via DFU
+/*
+ * Flash layout (2 KB pages). The same in the bootloader's memory_map.h
+ * (open-lifu-transmitter-bl): change both together.
+ *
+ *   pages   0- 31  0x08000000  secure bootloader (64 KB)
+ *   pages  32- 95  0x08010000  application slot (128 KB): signed header, then
+ *                              the image at +0x400
+ *   pages  96-125  0x08030000  presets (60 KB, presets.h): 15 slots of 4 KB
+ *                              (two pages), preset N at 0x08030000 + N x 0x1000
+ *   page      126  0x0803F000  the bootloader's anti-rollback version log
+ *   page      127  0x0803F800  runtime config (lifu_config.h)
+ *
+ * The presets and the runtime config sit outside the slot: the bootloader
+ * erases an image whose slot holds anything past the image, and DFU must not
+ * reach them. Bootloaders before 1.1.0-rc.1 still check pages 32-125, so until a
+ * unit has one, only a bare-metal image stores presets (PRESET_STORE,
+ * presets.h).
+ */
+#define FLASH_START_ADDRESS                 ADDR_FLASH_PAGE_0
+#define FLASH_END_ADDRESS                   ADDR_FLASH_END_ADDRESS
+#define BOOTLOADER_ADDRESS                  ADDR_FLASH_PAGE_0
+#define APPLICATION_ADDRESS                 ADDR_FLASH_PAGE_32 // slot start: signed header
+#define APPLICATION_IMAGE_OFFSET            ((uint32_t)0x400)  // the image runs at the slot start + 0x400
+#define APPLICATION_SLOT_SIZE               ((uint32_t)(ADDR_FLASH_PAGE_96 - ADDR_FLASH_PAGE_32))
+#define APPLICATION_MAX_SIZE                (APPLICATION_SLOT_SIZE - APPLICATION_IMAGE_OFFSET)
+#define PRESET_STORE_ADDRESS                ADDR_FLASH_PAGE_96
+#define PRESET_STORE_SIZE                   ((uint32_t)(ADDR_FLASH_PAGE_126 - ADDR_FLASH_PAGE_96))
+#define PRESET_SLOT_SIZE                    ((uint32_t)(ADDR_FLASH_PAGE_98 - ADDR_FLASH_PAGE_96)) // 4 KB
+#define PRESET_SLOT_COUNT                   15u
+#define PRESET_SLOT_ADDRESS(n)              (PRESET_STORE_ADDRESS + ((uint32_t)(n) * PRESET_SLOT_SIZE))
+// Anti-rollback version log: the secure bootloader's (its MEM_ANTIROLLBACK_BASE).
+// The application must never write or erase it.
+#define BOOTLOADER_ANTIROLLBACK_ADDRESS     ADDR_FLASH_PAGE_126
+#define BOOTLOADER_ANTIROLLBACK_SIZE        ((uint32_t)(ADDR_FLASH_PAGE_127 - ADDR_FLASH_PAGE_126))
+// Runtime config (lifu_config.h): the application's own, never written by DFU.
+#define APPLICATION_RUNTIME_CONFIG          ADDR_FLASH_PAGE_127
+#define APPLICATION_RUNTIME_CONFIG_SIZE     ((uint32_t)(ADDR_FLASH_END_ADDRESS - ADDR_FLASH_PAGE_127))
 
-// Presets, pages 110-125 (standard image, see presets.h). Outside the application slot:
-// the bootloader erases an image whose slot holds anything past the image, and
-// DFU must not reach the presets either. The bootloader's own memory_map.h has
-// to agree; until it does (open-lifu-transmitter-bl 1.0.1 still checks pages
-// 32-125), only a bare-metal image stores presets (PRESET_STORE, presets.h).
-#define PRESETS_ADDRESS                ADDR_FLASH_PAGE_110
-#define PRESETS_SIZE                   ((uint32_t)(ADDR_FLASH_PAGE_126 - ADDR_FLASH_PAGE_110))
+/* The bootloader info block (open-lifu-transmitter-bl bl_info.c, >= 1.1.0-rc.1):
+ * 32 bytes at a fixed address at the end of its vector area, the flash layout
+ * and DFU capabilities it was built with, read as words:
+ *   [0] magic  [1] layout (low half)  [2] slot base  [3] slot end
+ *   [4] preset base  [5] preset size  [6] capabilities  [7] reserved
+ * Older bootloaders have only fill bytes here, so the magic tells them apart. */
+#define BL_INFO_ADDRESS                     ((uint32_t)0x080001E0)
+#define BL_INFO_MAGIC                       ((uint32_t)0x4942574F) // 'OWBI'
+#define BL_INFO_WORD_MAGIC                  0u
+#define BL_INFO_WORD_PRESET_BASE            4u
+#define BL_INFO_WORD_PRESET_SIZE            5u
+#define BL_INFO_WORD_CAPS                   6u
+#define BL_CAP_SIGNED_PRESET_WRITE          ((uint32_t)0x00000002) // preset slots take signed presets
+
+_Static_assert(APPLICATION_ADDRESS + APPLICATION_SLOT_SIZE == PRESET_STORE_ADDRESS,
+               "the presets sit right above the slot");
+_Static_assert(PRESET_SLOT_COUNT * PRESET_SLOT_SIZE == PRESET_STORE_SIZE,
+               "the preset slots fill the preset pages exactly");
+_Static_assert(PRESET_STORE_ADDRESS + PRESET_STORE_SIZE == BOOTLOADER_ANTIROLLBACK_ADDRESS,
+               "then the bootloader's anti-rollback page");
+_Static_assert(BOOTLOADER_ANTIROLLBACK_ADDRESS + BOOTLOADER_ANTIROLLBACK_SIZE == APPLICATION_RUNTIME_CONFIG,
+               "then the runtime config");
+_Static_assert(APPLICATION_RUNTIME_CONFIG + APPLICATION_RUNTIME_CONFIG_SIZE == FLASH_END_ADDRESS,
+               "which is the last page");
 
 #ifdef __cplusplus
 }

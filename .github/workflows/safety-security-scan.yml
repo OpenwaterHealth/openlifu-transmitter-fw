@@ -4,7 +4,11 @@ on:
   push:
     branches: [ main, next ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, next ]
+  # New CVEs are published against unchanged code: rescan the SBOM weekly.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   static-analysis:
@@ -43,7 +47,6 @@ jobs:
                    --suppress=*:Core/Src/system_stm32l4xx.c \
                    --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
-                   --suppress=variableScope:Core/Src/presets.c:590 \
                    --suppress=constParameterPointer:Core/Src/tx7332.c:147 \
                    ./Core/Src ./USB_DEVICE/App
 
@@ -62,10 +65,34 @@ jobs:
             -x "*/stm32l4xx_hal_msp.c" \
             --whitelist lizard_whitelist.csv
 
-      # 3. Vulnerability Scan against the committed SBOM
+      # 3. Generate the SBOM from this checkout (it is a build output, not committed).
+      # scripts/gen_sbom.py reads the HAL / CMSIS versions from the tree and takes
+      # the toolchain and newlib (linked C library) versions from the build image
+      # that builds the release. Everything else comes from the reviewed
+      # scripts/sbom-manifest.json, whose components are hash-pinned to the vendored
+      # files: this step FAILS if vendored code changed without a manifest review.
+      - name: Generate SBOM
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/openwaterhealth/stm32-build-env:latest
+          docker pull -q "$IMG" > /dev/null
+          IMG_REF="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMG")"
+          TOOLCHAIN="$(docker run --rm "$IMG" arm-none-eabi-gcc --version | head -1)"
+          NEWLIB="$(docker run --rm "$IMG" sh -c 'echo "#include <newlib.h>" | arm-none-eabi-gcc -E -dM -' \
+                    | sed -n 's/^#define _NEWLIB_VERSION "\(.*\)"/\1/p')"
+          test -n "$NEWLIB"
+          python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
+            --name "${GITHUB_REPOSITORY#*/}" --config Release \
+            --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
+            -o sbom.cdx.json
+
+      # 4. Vulnerability scan of the generated SBOM
       # grype consumes the CycloneDX SBOM and checks each component against
       # the Grype vulnerability database (NVD, OSV, GHSA, and others).
-      # Fails the build on any HIGH or CRITICAL finding.
+      # Fails the build on any HIGH or CRITICAL finding. A clean result only
+      # covers components with a CPE/purl the database knows (e.g. newlib); ST
+      # middleware has no CVE feed, so scripts/sbom-manifest.json records known
+      # issues there ("openwater:security-note") from manual review.
       - name: Scan SBOM for Vulnerabilities (grype)
         id: grype
         uses: anchore/scan-action@v6
@@ -75,7 +102,7 @@ jobs:
           severity-cutoff: high
           output-format: sarif
 
-      # 4. Upload SARIF results to GitHub Security tab
+      # 5. Upload SARIF results to GitHub Security tab
       # Makes vulnerability findings visible in the repository's Security view.
       # Code Scanning (Security tab) requires GitHub Advanced Security, which is
       # off by default on private repos. Don't fail the scan if it isn't enabled:
@@ -88,7 +115,7 @@ jobs:
         with:
           sarif_file: ${{ steps.grype.outputs.sarif }}
 
-      # 5. Upload Audit Artifacts
+      # 6. Upload Audit Artifacts
       # Keeps a record of the scan results for regulatory submission.
       - name: Archive Regulatory Evidence
         if: always()

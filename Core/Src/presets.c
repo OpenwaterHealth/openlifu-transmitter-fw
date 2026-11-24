@@ -16,6 +16,15 @@
 #include "flash_eeprom.h"
 #endif
 
+// Flash, read in place. The host unit tests (tests/unit/test_preset_slots.c)
+// map the addresses onto an array instead.
+#ifdef PRESETS_HOST_FLASH
+const uint8_t *presets_host_flash(uint32_t address);
+#define FLASH_AT(address) presets_host_flash(address)
+#else
+#define FLASH_AT(address) ((const uint8_t *)(uintptr_t)(address))
+#endif
+
 extern TX7332 transmitters[TX_PER_MODULE];
 
 // A load also arms the preset's thermal limits (thermal_limits.h), which
@@ -134,128 +143,99 @@ static bool parse_blob(const uint8_t *data, uint32_t len, Preset *out)
 	return c.p == c.end;
 }
 
-#ifndef FDA_MODE
+_Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESET_STORE_SIZE,
+               "the slots must fill the preset pages exactly");
 
-_Static_assert(PRESET_SLOTS * PRESET_SLOT_SIZE == PRESETS_SIZE,
-               "the slots must fill the reserved pages exactly");
-
-static uint32_t slot_address(uint8_t slot)
+bool presets_have_slots(void)
 {
-	return PRESETS_ADDRESS + ((uint32_t)slot * PRESET_SLOT_SIZE);
+#ifdef BARE_METAL
+	return true;   // no bootloader: the pages are this image's
+#else
+	// The bootloader's info block (memory_map.h BL_INFO_*): its preset slots
+	// must be these, and it must take signed presets into them.
+	const uint8_t *info = FLASH_AT(BL_INFO_ADDRESS);
+	return rd_u32(&info[4U * BL_INFO_WORD_MAGIC]) == BL_INFO_MAGIC &&
+	       rd_u32(&info[4U * BL_INFO_WORD_PRESET_BASE]) == PRESET_STORE_ADDRESS &&
+	       rd_u32(&info[4U * BL_INFO_WORD_PRESET_SIZE]) == PRESET_STORE_SIZE &&
+	       (rd_u32(&info[4U * BL_INFO_WORD_CAPS]) & BL_CAP_SIGNED_PRESET_WRITE) != 0U;
+#endif
 }
 
-static uint8_t slots_for(uint32_t len)
+static const uint8_t *slot_image(uint8_t slot)
 {
-	return (len > PRESET_SLOT_SIZE) ? 2U : 1U;
+	return FLASH_AT(PRESET_SLOT_ADDRESS(slot));
 }
 
-// Length of the blob that starts at a slot, or 0 if none does. The header is
-// enough to tell: commit only stores a blob that validated, magic last.
-static uint32_t header_len(uint8_t slot)
+// Length of the blob in a slot, or 0 if the slot holds no preset: no slots,
+// no PRS1 header, or a size that does not fit. The blob itself is checked
+// when it is parsed.
+static uint32_t slot_blob_len(uint8_t slot)
 {
-	const uint8_t *p = (const uint8_t *)slot_address(slot);
-	if (memcmp(p, "OWPR", 4U) != 0) return 0U;
+	if (slot >= PRESET_SLOTS) return 0U;
+	// cppcheck-suppress knownConditionTrueFalse ; always true in a bare-metal build only
+	if (!presets_have_slots()) return 0U;
+	const uint8_t *p = slot_image(slot);
+	if (memcmp(p, PRESET_HEADER_MAGIC, 4U) != 0) return 0U;
 	uint32_t len = rd_u32(&p[8]);
-	uint32_t room = (uint32_t)(PRESET_SLOTS - slot) * PRESET_SLOT_SIZE;
-	if (room > PRESET_BLOB_MAX) room = PRESET_BLOB_MAX;
-	return (len <= room) ? len : 0U;
+	return (len <= PRESET_BLOB_MAX) ? len : 0U;
 }
 
-// Slots are claimed front to back, a long blob taking the slot after it, so
-// what a slot is depends on the ones before it. Returns the length of the blob
-// the slot heads, or 0 with *tail saying whether the preset before owns it.
-static uint32_t slot_len(uint8_t slot, bool *tail)
-{
-	*tail = false;
-	for (uint8_t i = 0; i < PRESET_SLOTS; ) {
-		uint32_t len = header_len(i);
-		if (i == slot) return len;
-		if (len > PRESET_SLOT_SIZE && (uint8_t)(i + 1U) == slot) {
-			*tail = true;
-			return 0U;
-		}
-		i = (uint8_t)(i + ((len != 0U) ? slots_for(len) : 1U));
-	}
-	return 0U;
-}
-
-// The blob a slot holds, if it heads one.
 static bool slot_blob(uint8_t slot, PresetBlob *out)
 {
-	bool tail;
-	if (slot >= PRESET_SLOTS) return false;
-	uint32_t len = slot_len(slot, &tail);
+	uint32_t len = slot_blob_len(slot);
 	if (len == 0U) return false;
-	out->data = (const uint8_t *)slot_address(slot);
+	out->data = slot_image(slot) + PRESET_HEADER_LEN;
 	out->len = len;
 	return true;
 }
-
-#elif defined(PRESET_TABLE) /* FDA_MODE, a set of presets */
-
-// The set, from the SDK's generate_preset_set: index i is its i-th preset.
-// The blobs are const data in the image, so what runs is what was flashed.
-#include "presets/preset_table.h"
-
-_Static_assert(PRESET_COUNT >= 1u && PRESET_COUNT <= PRESET_SLOTS,
-               "a linked set has 1..PRESET_SLOTS presets");
-_Static_assert(PRESET_MODULES == 1u,
-               "a presets-only image runs 1x presets: every module would need its own column");
-
-#else /* FDA_MODE, one preset */
-
-// The one preset, from the SDK. The linker puts it right after the code
-// (.fda_preset); it is read from there, so what runs is what was flashed.
-#include "presets/fda_preset.h"
-extern const uint8_t _sfda_preset[];
-
-static bool fda_blob(PresetBlob *out)
-{
-	const uint8_t *p = _sfda_preset;
-	if (memcmp(p, "OWPR", 4U) != 0) return false;
-	uint32_t len = rd_u32(&p[8]);
-	if (len > PRESET_BLOB_MAX) return false;
-	out->data = p;
-	out->len = len;
-	return true;
-}
-
-#endif /* FDA_MODE */
 
 uint8_t presets_slot_state(uint8_t slot)
 {
 	if (slot >= PRESET_COUNT) return OW_INVALID_PACKET;
-#ifndef FDA_MODE
-	bool tail;
-	if (slot_len(slot, &tail) != 0U) return OW_SUCCESS;
-	return tail ? OW_PRESET_SLOT_TAIL : OW_PRESET_EMPTY;
-#elif defined(PRESET_TABLE)
-	return OW_SUCCESS;   // every index below PRESET_COUNT is one of the set
-#else
-	PresetBlob blob;
-	return fda_blob(&blob) ? OW_SUCCESS : OW_PRESET_EMPTY;
-#endif
+	return (slot_blob_len(slot) != 0U) ? OW_SUCCESS : OW_PRESET_EMPTY;
+}
+
+const uint8_t *presets_header(uint8_t slot)
+{
+	return (slot_blob_len(slot) != 0U) ? slot_image(slot) : NULL;
 }
 
 #ifdef PRESET_STORE
 
-// The upload in progress; one at a time, and offset 0 starts over.
-static uint8_t stage[PRESET_BLOB_MAX];
+// The upload in progress, a whole slot image; one at a time, and offset 0
+// starts over. In SRAM2 (the linker scripts' .ram2), clear of the main RAM.
+__attribute__((section(".ram2"))) static uint8_t stage[PRESET_SLOT_SIZE];
 static uint32_t stage_len = 0;
 static uint8_t stage_slot = PRESET_SLOTS;   // none
 
-// Is this a well-formed PRESET_BLOB whose body matches its regs_crc?
-static bool blob_valid(const uint8_t *data, uint32_t len)
+// A PRS1 header whose size is the blob's, then a well-formed PRESET_BLOB
+// whose body matches its regs_crc.
+static bool image_valid(const uint8_t *image, uint32_t len)
 {
 	Preset preset;
-	return parse_blob(data, len, &preset) && presets_regs_crc(&preset) == preset.regs_crc;
+	if (len <= PRESET_HEADER_LEN || memcmp(image, PRESET_HEADER_MAGIC, 4U) != 0) return false;
+	uint32_t blob_len = len - PRESET_HEADER_LEN;
+	if (rd_u32(&image[8]) != blob_len) return false;
+	return parse_blob(&image[PRESET_HEADER_LEN], blob_len, &preset) &&
+	       presets_regs_crc(&preset) == preset.regs_crc;
 }
 
-// Slots [first, first + count) are about to change. If the loaded preset is
-// among them, nothing counts as loaded until the next load.
-static void slots_changing(uint8_t first, uint8_t count)
+// Erased, so there is nothing to delete (a slot that reads as empty may still
+// hold the remains of an interrupted write or older data).
+static bool slot_blank(uint8_t slot)
 {
-	if (preset_loaded && loaded.index >= first && (uint8_t)(loaded.index - first) < count) {
+	const uint8_t *p = slot_image(slot);
+	for (uint32_t i = 0; i < PRESET_SLOT_SIZE; i++) {
+		if (p[i] != 0xFFU) return false;
+	}
+	return true;
+}
+
+// A slot is about to change. If it holds the loaded preset, nothing counts
+// as loaded until the next load.
+static void slot_changing(uint8_t slot)
+{
+	if (preset_loaded && loaded.index == slot) {
 		preset_loaded = false;
 	}
 }
@@ -263,10 +243,9 @@ static void slots_changing(uint8_t first, uint8_t count)
 uint8_t presets_free_slots(void)
 {
 	uint8_t free_slots = 0;
-	for (uint8_t i = 0; i < PRESET_SLOTS; ) {
-		uint32_t len = header_len(i);
-		if (len == 0U) free_slots++;
-		i = (uint8_t)(i + ((len != 0U) ? slots_for(len) : 1U));
+	if (!presets_have_slots()) return 0U;
+	for (uint8_t i = 0; i < PRESET_SLOTS; i++) {
+		if (slot_blob_len(i) == 0U) free_slots++;
 	}
 	return free_slots;
 }
@@ -278,7 +257,7 @@ uint8_t presets_stage(uint8_t slot, uint32_t offset, const uint8_t *data, uint16
 		stage_slot = slot;
 		stage_len = 0U;
 	}
-	if (slot != stage_slot || offset != stage_len || len == 0U || len > (PRESET_BLOB_MAX - stage_len)) {
+	if (slot != stage_slot || offset != stage_len || len == 0U || len > (PRESET_SLOT_SIZE - stage_len)) {
 		stage_slot = PRESET_SLOTS;
 		return OW_INVALID_PACKET;
 	}
@@ -287,35 +266,27 @@ uint8_t presets_stage(uint8_t slot, uint32_t offset, const uint8_t *data, uint16
 	return OW_SUCCESS;
 }
 
-uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
+uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t image_crc)
 {
-	bool tail;
 	uint8_t staged = stage_slot;
 	stage_slot = PRESET_SLOTS;   // an upload gets one commit, pass or fail
 
 	if (slot >= PRESET_SLOTS || slot != staged || total_len != stage_len) return OW_INVALID_PACKET;
-	if (presets_crc32(stage, stage_len) != blob_crc || !blob_valid(stage, stage_len)) return OW_BAD_CRC;
-
-	uint32_t old_len = slot_len(slot, &tail);
-	if (tail) return OW_PRESET_SLOT_TAIL;
-	uint8_t new_slots = slots_for(stage_len);
-	uint8_t old_slots = slots_for(old_len);
-	uint8_t next = (uint8_t)(slot + 1U);
-	if (new_slots > old_slots && (next >= PRESET_SLOTS || header_len(next) != 0U)) return OW_PRESET_NO_ROOM;
+	if (presets_crc32(stage, stage_len) != image_crc || !image_valid(stage, stage_len)) return OW_BAD_CRC;
+	if (!presets_have_slots()) return OW_PRESET_NO_ROOM;
 
 	// A flash erase stalls the core for milliseconds, trigger ISRs included,
 	// and storing over the loaded slot would unload a paused sequence.
 	if (sequence_under_way()) return OW_PRESET_BUSY;
 
-	// Erase whatever the old blob held as well, so a shorter one frees its second slot.
-	uint8_t span = (new_slots > old_slots) ? new_slots : old_slots;
-	uint32_t base = slot_address(slot);
-	uint32_t end = base + ((uint32_t)span * PRESET_SLOT_SIZE);
-	slots_changing(slot, span);
+	uint32_t base = PRESET_SLOT_ADDRESS(slot);
+	uint32_t end = base + PRESET_SLOT_SIZE;
+	slot_changing(slot);
 	if (Flash_Erase(base, end) != HAL_OK) return OW_UNKNOWN_ERROR;
+	// The magic's doubleword last: a write cut short leaves an empty slot.
 	if (Flash_Write(base + 8U, &stage[8], stage_len - 8U) != HAL_OK ||
 	    Flash_Write(base, stage, 8U) != HAL_OK ||
-	    memcmp((const void *)base, stage, stage_len) != 0) {
+	    memcmp(FLASH_AT(base), stage, stage_len) != 0) {
 		(void)Flash_Erase(base, end);
 		return OW_UNKNOWN_ERROR;
 	}
@@ -324,16 +295,14 @@ uint8_t presets_commit(uint8_t slot, uint32_t total_len, uint32_t blob_crc)
 
 uint8_t presets_delete(uint8_t slot)
 {
-	bool tail;
 	if (slot >= PRESET_SLOTS) return OW_INVALID_PACKET;
-	uint32_t len = slot_len(slot, &tail);
-	if (tail) return OW_PRESET_SLOT_TAIL;
-	if (len == 0U) return OW_SUCCESS;
+	if (!presets_have_slots()) return OW_PRESET_NO_ROOM;
+	if (slot_blank(slot)) return OW_SUCCESS;
 	if (sequence_under_way()) return OW_PRESET_BUSY;
 
-	uint32_t base = slot_address(slot);
-	slots_changing(slot, slots_for(len));
-	if (Flash_Erase(base, base + ((uint32_t)slots_for(len) * PRESET_SLOT_SIZE)) != HAL_OK) return OW_UNKNOWN_ERROR;
+	uint32_t base = PRESET_SLOT_ADDRESS(slot);
+	slot_changing(slot);
+	if (Flash_Erase(base, base + PRESET_SLOT_SIZE) != HAL_OK) return OW_UNKNOWN_ERROR;
 	return OW_SUCCESS;
 }
 
@@ -347,14 +316,7 @@ uint8_t presets_count(void)
 bool presets_get(uint8_t index, Preset *out)
 {
 	PresetBlob blob;
-#ifndef FDA_MODE
 	if (index >= PRESET_COUNT || !slot_blob(index, &blob)) return false;
-#elif defined(PRESET_TABLE)
-	if (index >= PRESET_COUNT) return false;
-	blob = preset_table[index][0];
-#else
-	if (index != 0U || !fda_blob(&blob)) return false;
-#endif
 	return parse_blob(blob.data, blob.len, out);
 }
 
@@ -587,7 +549,6 @@ static int format_fixed(char *buf, size_t size, int32_t value, uint8_t decimals)
 
 uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 {
-	char now[16], limit[16];
 	int len;
 
 	if (size == 0U) return 0U;
@@ -602,6 +563,7 @@ uint16_t presets_start_refusal(uint8_t code, char *buf, uint16_t size)
 	case OW_TEMP_TOO_HIGH: {
 		// Hundredths for the reading, so 35.04 does not print as "35.0 above 35.0".
 		float t = tx_temperature * 100.0f;
+		char now[16], limit[16];
 		ThermalLimits armed;
 		thermal_limits_get(&armed);
 		(void)format_fixed(now, sizeof(now), (int32_t)(t + ((t >= 0.0f) ? 0.5f : -0.5f)), 2U);

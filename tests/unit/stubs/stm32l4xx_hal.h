@@ -18,6 +18,8 @@ typedef struct SPI_HandleTypeDef SPI_HandleTypeDef;
 typedef struct TIM_HandleTypeDef TIM_HandleTypeDef;
 typedef struct UART_HandleTypeDef UART_HandleTypeDef;
 
+typedef enum { HAL_OK = 0, HAL_ERROR = 1, HAL_BUSY = 2, HAL_TIMEOUT = 3 } HAL_StatusTypeDef;
+
 uint32_t HAL_GetTick(void);
 
 #endif /* STM32L4XX_HAL_H */

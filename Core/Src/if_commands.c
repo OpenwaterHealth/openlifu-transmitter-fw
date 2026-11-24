@@ -32,12 +32,13 @@ extern bool _enter_dfu;
 // A module bootloader's I2C address before the master enumerates it
 // (openlifu_sdk.io.LIFUDFU).
 #define MODULE_BL_DEFAULT_I2C_ADDR 0x72U
-extern bool _force_stm32_dfu; // for testing purposes, forces to enter STM32 system bootloader instead of custom DFU mode
 
 extern TX7332 transmitters[2];
 extern bool async_enabled;
 
 static uint32_t id_words[3] = {0};
+static uint8_t sigchk_reply[1U + SIGCHK_HEADER_LEN];   // OW_CMD_SIGCHK
+static uint8_t bl_version[BL_VERSION_MAX_LEN];         // OW_CMD_BL_VERSION
 static char retTriggerJson[0xFF];
 static uint8_t module_count = 0;
 static uint8_t node_mode_byte = NODE_MODE_APP;   // this node runs application firmware
@@ -191,6 +192,77 @@ void reset_profile_cycle_to_start(void)
 	apply_next_profile_in_cycle();
 }
 
+#ifndef BARE_METAL
+// A character of the bootloader's version text ("1.1.0", "1.1.0-rc.3").
+static bool bl_version_char(uint8_t c)
+{
+	return (c >= (uint8_t)'0' && c <= (uint8_t)'9') || (c >= (uint8_t)'A' && c <= (uint8_t)'Z') ||
+	       (c >= (uint8_t)'a' && c <= (uint8_t)'z') || c == (uint8_t)'.' || c == (uint8_t)'+' ||
+	       c == (uint8_t)'-';
+}
+
+// Find the bootloader's USB product string, "OW DFU " FW_VERSION
+// (open-lifu-transmitter-bl usbd_desc.c), in its flash, and copy the version
+// after it to out. A clinical bootloader's PCROP area (the key) reads as zero
+// and sets RDERR, so it is skipped: its bounds are double-word offsets from
+// the flash base (FLASH->PCROP1SR/ER), and it is set when start <= end.
+// Returns the version's length, 0 if there is none.
+static uint16_t bl_version_scan(uint8_t *out, uint16_t max)
+{
+	static const char marker[] = "OW DFU ";
+	const uint32_t marker_len = (uint32_t)sizeof(marker) - 1U;
+	const uint32_t strt = FLASH->PCROP1SR & FLASH_PCROP1SR_PCROP1_STRT;
+	const uint32_t end = FLASH->PCROP1ER & FLASH_PCROP1ER_PCROP1_END;
+	uint32_t pcrop_lo = 1U, pcrop_hi = 0U;   // none: lo > hi
+	if (strt <= end) {
+		pcrop_lo = FLASH_BASE + (strt << 3);
+		pcrop_hi = FLASH_BASE + (end << 3) + 7U;
+	}
+
+	uint16_t len = 0U;
+	uint32_t matched = 0U;
+	for (uint32_t a = BOOTLOADER_ADDRESS; a < APPLICATION_ADDRESS && len < max; a++) {
+		if (a >= pcrop_lo && a <= pcrop_hi) {
+			if (len > 0U) break;
+			a = pcrop_hi;
+			matched = 0U;
+			continue;
+		}
+		const uint8_t c = *(const volatile uint8_t *)a;
+		if (matched < marker_len) {
+			// 'O' is in the marker only once, so a mismatch restarts it.
+			matched = (c == (uint8_t)marker[matched]) ? matched + 1U : ((c == (uint8_t)marker[0]) ? 1U : 0U);
+		} else if (bl_version_char(c)) {
+			out[len++] = c;
+		} else if (len > 0U) {
+			break;
+		} else {
+			matched = (c == (uint8_t)marker[0]) ? 1U : 0U;   // the marker with no version
+		}
+	}
+	if (__HAL_FLASH_GET_FLAG(FLASH_FLAG_RDERR)) __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_RDERR);
+	return len;
+}
+#endif
+
+// The bootloader's version for OW_CMD_BL_VERSION, in bl_version: scanned for
+// once, as the bootloader does not change while the application runs. A
+// bare-metal image has no bootloader.
+static uint16_t bl_version_get(void)
+{
+#ifdef BARE_METAL
+	return 0U;
+#else
+	static bool scanned = false;
+	static uint16_t len = 0U;
+	if (!scanned) {
+		len = bl_version_scan(bl_version, (uint16_t)sizeof(bl_version));
+		scanned = true;
+	}
+	return len;
+#endif
+}
+
 static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
 static void process_i2c_forward(UartPacket *uartResp, const UartPacket* cmd, uint8_t module_id);
 
@@ -244,6 +316,13 @@ static void process_i2c_read_buffer(UartPacket *uartResp, const UartPacket* cmd,
 		uartResp->packet_type = ret_i2c_packet.reserved;
 		uartResp->data_len = ret_i2c_packet.data_len;
 		uartResp->data = (uint8_t *)ret_i2c_packet.pData;
+		// A module's refusal (i2c_slave.c): OW_ERROR, its code the one data
+		// byte. Reply with the code where the host reads it.
+		if (ret_i2c_packet.reserved == OW_ERROR && ret_i2c_packet.data_len >= 1U) {
+			uartResp->reserved = ret_i2c_packet.pData[0];
+			uartResp->data_len = 0;
+			uartResp->data = NULL;
+		}
 	} else {
 		uartResp->packet_type = OW_ERROR;
 	}
@@ -514,7 +593,6 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 		case OW_CMD_DFU:
 			uartResp->id = cmd->id;
 			uartResp->command = OW_CMD_DFU;
@@ -536,7 +614,6 @@ static void ONE_WIRE_ProcessCommand(UartPacket *uartResp, UartPacket *cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#endif
 		default:
 			uartResp->addr = 0;
 			uartResp->reserved = 0;
@@ -815,6 +892,46 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
+		case OW_CMD_SIGCHK:
+			// The host verifies the signature (SR-021): a slot build sends the
+			// signed header the bootloader checked at boot; a bare-metal build
+			// has none and says so.
+			cmd->data_len = sizeof(sigchk_reply); //passing amount to read if forwarding to slave
+			if (module_id == 0x00)
+			{
+				uartResp->id = cmd->id;
+				uartResp->command = cmd->command;
+				uartResp->reserved = cmd->reserved;
+				uartResp->addr = cmd->addr;
+#ifdef BARE_METAL
+				sigchk_reply[0] = SIGCHK_BARE_METAL;
+				uartResp->data_len = 1U;
+#else
+				sigchk_reply[0] = SIGCHK_SLOT_IMAGE;
+				memcpy(&sigchk_reply[1], (const void *)APPLICATION_ADDRESS, SIGCHK_HEADER_LEN);
+				uartResp->data_len = sizeof(sigchk_reply);
+#endif
+				uartResp->data = sigchk_reply;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
+			}
+			break;
+		case OW_CMD_BL_VERSION:
+			// The installed bootloader's version (SR-021), so the host learns
+			// it without entering DFU. Empty if none is found.
+			cmd->data_len = BL_VERSION_MAX_LEN; //passing amount to read if forwarding to slave
+			if (module_id == 0x00)
+			{
+				uartResp->id = cmd->id;
+				uartResp->command = cmd->command;
+				uartResp->reserved = cmd->reserved;
+				uartResp->addr = cmd->addr;
+				uartResp->data_len = bl_version_get();
+				uartResp->data = bl_version;
+			} else {
+				process_i2c_forward(uartResp, cmd, module_id);
+			}
+			break;
 		case OW_CMD_GET_TEMP:
 			cmd->data_len = TEMPERATURE_DATA_LENGTH; //passing amount to read if forwarding to slave
 			if (module_id == 0){
@@ -1075,7 +1192,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 		case OW_CMD_DFU:
 			if (module_id == 0x00){
 				uartResp->command = cmd->command;
@@ -1083,8 +1199,16 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uartResp->reserved = cmd->reserved;
 				uartResp->data_len = 0;
 
+#ifndef BARE_METAL
+				// Under the bootloader, DFU is its DFU: the STM32 ROM loader takes
+				// unsigned images and is not built into this image (SR-021).
+				if (cmd->reserved == PRESET_POLICY_DFU_ROM_LOADER) {
+					uartResp->reserved = OW_INVALID_PACKET;
+					uartResp->packet_type = OW_ERROR;
+					break;
+				}
+#endif
 				_enter_dfu = true;
-				_force_stm32_dfu = cmd->reserved == 0x77? true : false; // force to enter STM32 DFU bootloader instead of custom DFU mode for testing purposes
 
 				__HAL_LPTIM_CLEAR_FLAG(&RESET_TIMER, LPTIM_FLAG_ARRM | LPTIM_FLAG_CMPM |
 													LPTIM_FLAG_EXTTRIG | LPTIM_FLAG_DOWN |
@@ -1096,7 +1220,6 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				process_i2c_forward(uartResp, cmd, module_id);
 			}
 			break;
-#endif
 		case OW_CMD_ASYNC:
 			uartResp->command = cmd->command;
 			uartResp->addr = cmd->addr;
@@ -1545,6 +1668,27 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			uartResp->data = limits_reply;
 			break;
 		}
+		case OW_PRESET_INFO: {
+			uartResp->command = cmd->command;
+			uartResp->addr = cmd->addr;
+			uartResp->reserved = cmd->reserved;
+			uartResp->data_len = 0;
+			if (module_id != 0x00) {
+				cmd->data_len = PRESET_HEADER_LEN;   // the reply to read back from the module
+				process_i2c_forward(uartResp, cmd, module_id);
+				break;
+			}
+			const uint8_t *header = presets_header(cmd->reserved);
+			if (header == NULL) {
+				uartResp->reserved = presets_have_slots() ? OW_PRESET_EMPTY : OW_PRESET_NO_ROOM;
+				if (cmd->reserved >= presets_count()) uartResp->reserved = OW_INVALID_PACKET;
+				uartResp->packet_type = OW_ERROR;
+				return;
+			}
+			uartResp->data = (uint8_t *)header;   // read-only flash; the reply is sent from it
+			uartResp->data_len = PRESET_HEADER_LEN;
+			break;
+		}
 #ifdef PRESET_STORE
 		case OW_PRESET_CAPACITY: {
 			// What there is to fill, from this module's own slots like GET:
@@ -1559,7 +1703,7 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 				uartResp->packet_type = OW_ERROR;
 				return;
 			}
-			capacity_reply[0] = (uint8_t)PRESET_SLOTS;
+			capacity_reply[0] = presets_have_slots() ? (uint8_t)PRESET_SLOTS : 0U;
 			capacity_reply[1] = presets_free_slots();
 			capacity_reply[2] = (uint8_t)(PRESET_SLOT_SIZE & 0xFFU);
 			capacity_reply[3] = (uint8_t)(PRESET_SLOT_SIZE >> 8);
@@ -1583,14 +1727,14 @@ static void CONTROLLER_ProcessCommand(UartPacket *uartResp, UartPacket* cmd)
 			}
 			uint8_t result = OW_INVALID_PACKET;
 			if (cmd->command == OW_PRESET_WRITE) {
-				// Payload: offset u16 LE, then that part of the blob.
+				// Payload: offset u16 LE, then that part of the slot image.
 				if (cmd->data != NULL && cmd->data_len > 2U) {
 					uint32_t offset = (uint32_t)cmd->data[0] | ((uint32_t)cmd->data[1] << 8);
 					result = presets_stage(cmd->reserved, offset, &cmd->data[2],
 					                       (uint16_t)(cmd->data_len - 2U));
 				}
 			} else if (cmd->command == OW_PRESET_COMMIT) {
-				// Payload: length u32 and CRC-32 u32 of the whole blob, both LE.
+				// Payload: length u32 and CRC-32 u32 of the whole slot image, both LE.
 				if (cmd->data != NULL && cmd->data_len == 8U) {
 					uint32_t len = 0U, crc = 0U;
 					for (int i = 0; i < 4; i++) {
@@ -1930,7 +2074,7 @@ static bool raw_write_runs_here(const UartPacket *cmd)
 }
 #endif
 
-// Checked before any handler or i2c forward. A presets-only image (FDA_MODE)
+// Checked before any handler or i2c forward. The clinical image (FDA_MODE)
 // refuses whatever would change what its preset runs or what the device holds
 // (preset_policy.c). A standard image lets a raw register, profile or trigger
 // write through and leaves nothing loaded -- unless a loaded preset is
@@ -1999,7 +2143,6 @@ bool process_if_command(UartPacket *cmd, UartPacket *resp)
 	case OW_TX7332:
 		TX7332_ProcessCommand(resp, cmd);
 		break;
-#if !defined(FDA_MODE) || defined(FDA_TEST_IMAGE)  // a +fda image refuses it (preset_policy.c), so it is not built in
 	case OW_I2C_PASSTHRU:
 	{
 		/* Raw I2C passthrough: forward bytes to an I2C slave (typically the
@@ -2043,7 +2186,6 @@ bool process_if_command(UartPacket *cmd, UartPacket *resp)
 		}
 		break;
 	}
-#endif
 	default:
 		resp->data_len = 0;
 		resp->reserved = OW_UNKNOWN_ERROR;

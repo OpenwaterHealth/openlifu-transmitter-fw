@@ -170,6 +170,8 @@ static uint8_t slave_packet_type_for(uint8_t command)
 	case OW_CTRL_GET_PATTERN_PROFILE:
 	case OW_CTRL_ARM_PROFILE_CYCLE:
 		return OW_CONTROLLER;
+	case OW_CMD_BL_VERSION:   // a global command outside 0x00-0x0F
+		return OW_CMD;
 	default:
 		break;
 	}
@@ -231,10 +233,18 @@ void I2C_Process() {
 	}
 	else
 	{
-		set_transmit_buffer(NULL);
+		// The refusal and its code go back to the master (OW_ERROR, then the
+		// code as the one data byte), which replies to the host with them;
+		// without it a module's refusal reached the host as an empty success.
+		static uint8_t error_code;
+		error_code = resp.reserved;
+		packet_to_send_to_master.id = resp.id;
+		packet_to_send_to_master.cmd = resp.command;
+		packet_to_send_to_master.reserved = OW_ERROR;
+		packet_to_send_to_master.data_len = 1;
+		packet_to_send_to_master.pData = &error_code;
+		set_transmit_buffer(&packet_to_send_to_master);
 	}
-	
-
 }
 
 bool set_transmit_buffer(I2C_TX_Packet* packet)

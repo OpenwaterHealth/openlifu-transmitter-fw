@@ -105,21 +105,22 @@ USBD_StatusTypeDef USBD_Init(USBD_HandleTypeDef *pdev,
 
 #ifdef USE_USBD_COMPOSITE
   /* Parse the table of classes in use */
-  for (uint32_t i = 0; i < USBD_MAX_SUPPORTED_CLASS; i++)
+  for (uint32_t i = 0U; i < USBD_MAX_SUPPORTED_CLASS; i++)
   {
     /* Unlink previous class*/
     pdev->pClass[i] = NULL;
     pdev->pUserData[i] = NULL;
 
     /* Set class as inactive */
-    pdev->tclasslist[i].Active = 0;
-    pdev->NumClasses = 0;
-    pdev->classId = 0;
+    pdev->tclasslist[i].Active = 0U;
+    pdev->NumClasses = 0U;
+    pdev->classId = 0U;
   }
 #else
   /* Unlink previous class*/
   pdev->pClass[0] = NULL;
   pdev->pUserData[0] = NULL;
+  pdev->NumClasses = 0U;
 #endif /* USE_USBD_COMPOSITE */
 
   pdev->pConfDesc = NULL;

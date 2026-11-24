@@ -64,26 +64,9 @@
 _Static_assert(TX_OVERHEAT_HYSTERESIS <= TX_OVERHEAT_TRIP_POINT,
                "TX_OVERHEAT_HYSTERESIS must not exceed TX_OVERHEAT_TRIP_POINT");
 
-#define BL_BKP_SIGNATURE (0x4F57424CU)     /* 'OWBL' */
 #define BL_BKP_REQ_DFU_MAGIC (0xB007C0DEU) /* "BOOT CODE" — SBSFU bootloader DFU request, RTC->BKP7R */
 
 /* STM32L4 system-memory (ROM) bootloader entry point */
-#define STM32_SYS_BL_ADDR   (0x1FFF0000U)
-/* Our custom bootloader occupies 0x08000000..0x0800FFFF (62 KB) */
-#define CUSTOM_BL_START     (0x08000000U)
-#define CUSTOM_BL_END       (0x08010000U)
-
-/**
- * @brief Return true if our custom bootloader is programmed.
- *        Inspects the reset-handler vector stored at 0x08000004; if it
- *        falls inside the custom BL flash region a BL is present.
- */
-static bool is_custom_bootloader_present(void)
-{
-  uint32_t reset_handler = *(volatile uint32_t *)(CUSTOM_BL_START + 4U);
-  return (reset_handler >= CUSTOM_BL_START && reset_handler < CUSTOM_BL_END);
-}
-
 static void bl_bkp_enable(void)
 {
   __HAL_RCC_PWR_CLK_ENABLE();
@@ -103,9 +86,6 @@ static void bl_bkp_enable(void)
 void bootloader_mark_boot_ok(void)
 {
   bl_bkp_enable();
-  RTC->BKP0R = BL_BKP_SIGNATURE;
-  RTC->BKP2R = 0U; /* clears in-progress/force bits + failure count */
-  RTC->BKP3R = 0U; /* clears last-bad-fw marker */
   /* SBSFU secure bootloader failsafe boot counter: the bootloader increments
    * BKP6R before every launch and falls back to DFU after 3 attempts that
    * were not confirmed. Clearing it here confirms this boot succeeded. */
@@ -163,7 +143,6 @@ I2C_HandleTypeDef *GLOBAL_I2C_DEVICE = NULL;
 I2C_HandleTypeDef *LOCAL_I2C_DEVICE = NULL;
 
 volatile bool _enter_dfu = false;
-volatile bool _force_stm32_dfu = false; // for testing purposes, forces to enter STM32 system bootloader instead of custom DFU mode
 volatile bool _usb_interrupt_flag = false;
 volatile bool tx_overheat_flag = false;
 TX7332 transmitters[TX_PER_MODULE];
@@ -1716,25 +1695,20 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 
     if (_enter_dfu)
     {
-      if (is_custom_bootloader_present() && _force_stm32_dfu == false)
-      {
-        /* SBSFU secure bootloader present — request DFU mode by writing the
-         * one-shot magic to RTC->BKP7R and resetting. The bootloader consumes
-         * the magic, skips launching the application, and enters DFU (USB
-         * DfuSe when a host is attached, otherwise I2C slave at 0x72). */
-        bl_bkp_enable();
-        RTC->BKP7R = BL_BKP_REQ_DFU_MAGIC;
-      }
-      else
-      {
-#ifndef FDA_MODE
-        // jump to bootloader DFU
-        // 16k SRAM in address 0x2000 0000 - 0x2000 3FFF
-        *((unsigned long *)0x20003FF0) = 0xDEADBEEF;
+#ifdef BARE_METAL
+      /* No bootloader: the STM32 ROM loader is the only DFU. SystemInit()
+       * jumps to it after the reset. */
+      *((unsigned long *)0x20003FF0) = 0xDEADBEEF;
+#else
+      /* Under the SBSFU secure bootloader: request its DFU by writing the
+       * one-shot magic to RTC->BKP7R and resetting. The bootloader consumes
+       * the magic, skips launching the application, and enters DFU (USB
+       * DfuSe when a host is attached, otherwise I2C slave at 0x72). An image
+       * under the bootloader never enters the STM32 ROM loader, which takes
+       * unsigned images (SR-021): the jump is not even built into it. */
+      bl_bkp_enable();
+      RTC->BKP7R = BL_BKP_REQ_DFU_MAGIC;
 #endif
-        // A presets-only image never enters the STM32 ROM loader, which takes
-        // unsigned images (SR-021): with no secure bootloader it only resets.
-      }
 
     }
 

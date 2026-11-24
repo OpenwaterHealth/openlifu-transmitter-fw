@@ -1,0 +1,135 @@
+{
+  "description": "Open-LIFU transmitter (TX) module application firmware for STM32L443: TX7332 AFE configuration, trigger, thermistor and thermal limits, module manager (I2C master/slave, one-wire discovery), presets (FDA images); binary command protocol over USB CDC. Runs from the secure bootloader's slot (0x08010400) and enters the bootloader's DFU on request.",
+  "mcu": "STM32L443xx (Arm Cortex-M4F)",
+  "licenses": [
+    {
+      "license": {
+        "id": "Apache-2.0"
+      }
+    }
+  ],
+  "components": [
+    {
+      "type": "framework",
+      "name": "STM32Cube MCU Package for STM32L4 (FW_L4)",
+      "version": "1.18.2",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "STM32Cube package the HAL, CMSIS device files and middleware were generated from. The HAL / CMSIS versions actually in the tree are derived separately.",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:github/STMicroelectronics/STM32CubeL4@v1.18.2",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "lifu-transmitter-fw.ioc: ProjectManager.FirmwarePackage=STM32Cube FW_L4 V1.18.2. HAL v1.13.6 and CMSIS Device L4 v1.7.5 in the tree are the versions STM32CubeL4 v1.18.2 pins (identical to open-lifu-transmitter-bl's, checked 2026-11-17); the USB Device Library is one release newer than the pack (v2.11.6, see that component)."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "STM32 USB Device Library (Core + CDC class)",
+      "version": "2.11.6",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "USB device stack and CDC (virtual COM port) class carrying the host command protocol. Byte-identical to upstream v2.11.6 (no local changes).",
+      "licenses": [
+        {
+          "license": {
+            "name": "SLA0044"
+          }
+        }
+      ],
+      "purl": "pkg:github/STMicroelectronics/stm32-mw-usb-device@v2.11.6",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Core/ and Class/CDC/ diffed against upstream tag v2.11.6 on 2026-11-17. Core updated from v2.11.5 (the STM32CubeL4 v1.18.2 pin) to v2.11.6 for the usbd_ctlreq.c fixes (USBD_StdEPReq endpoint index > 15 rejected; USBD_GetString bounded); the CDC class was already identical to v2.11.6."
+        },
+        {
+          "name": "openwater:version-correction",
+          "value": "the hand-written SBOM listed 1.18.2, which is the FW_L4 package version, not the library version"
+        },
+        {
+          "name": "openwater:files",
+          "value": "Middlewares/ST/STM32_USB_Device_Library/Core/**/*, Middlewares/ST/STM32_USB_Device_Library/Class/**/*"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "0fbd7f1200b4cc6bf7f14c52388d736986c8ae7a0eb185871133922404c9d350"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "LwRB (lightweight ring buffer)",
+      "version": "2.0.0",
+      "supplier": {
+        "name": "Tilen Majerle"
+      },
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:github/MaJerle/lwrb@v2.0.0",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Core/Src/lwrb.c, Core/Inc/lwrb.h: 'Version: v2.0.0', Copyright (c) 2020 Tilen MAJERLE, MIT; compiled via CMakeLists.txt"
+        },
+        {
+          "name": "openwater:files",
+          "value": "Core/Src/lwrb.c, Core/Inc/lwrb.h"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "3ed385078be080ac5728641839f537b0af48d10420672380ddd4efacf3424f90"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "jsmn (JSON tokenizer)",
+      "supplier": {
+        "name": "Serge A. Zaitsev"
+      },
+      "scope": "required",
+      "description": "Minimal JSON tokenizer. A pre-1.0 two-file snapshot (jsmnerr_t API); upstream publishes no version macro, so no version is asserted.",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:github/zserge/jsmn",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Core/Src/jsmn.c, Core/Inc/jsmn.h: Copyright (c) 2010 Serge A. Zaitsev, MIT; compiled via CMakeLists.txt"
+        },
+        {
+          "name": "openwater:files",
+          "value": "Core/Src/jsmn.c, Core/Inc/jsmn.h"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "7873a57d40463a9ef0ee10846180072e0e52f86d1e3d16a0eb5efff92656c954"
+        }
+      ]
+    }
+  ]
+}
