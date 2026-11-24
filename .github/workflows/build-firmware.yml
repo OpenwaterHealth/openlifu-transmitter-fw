@@ -188,6 +188,8 @@ jobs:
       #     openlifu-sdk, but only if it is semver-newer than the latest stable
       #     release; otherwise the latest stable release.
       #   release build (release tag or main)       -> latest stable release.
+      # A release tag refuses to build while a newer SDK pre-release exists: its
+      # rcs were signed by that pre-release, so release the SDK first.
       # (The bootloader that verifies the image is bundled separately; the SDK
       # only owns the signing format.)
       - name: Resolve openlifu-sdk (signer) release
@@ -215,6 +217,12 @@ jobs:
           fi
           if [ -z "$TAG" ]; then
             echo "::error::No openlifu-sdk release found to install." >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/* && ! "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]] \
+             && [ -n "$PRE" ] && [ -n "$REL" ] \
+             && [ "$(printf '%s\n' "${PRE/-rc./~rc.}" "$REL" | sort -V | tail -n1)" = "${PRE/-rc./~rc.}" ]; then
+            echo "::error::openlifu-sdk ${PRE} is newer than its latest release ${REL}: release the SDK before tagging firmware ${GITHUB_REF_NAME}." >&2
             exit 1
           fi
           echo "SDK candidates: stable='${REL:-none}' pre-release='${PRE:-none}'"
