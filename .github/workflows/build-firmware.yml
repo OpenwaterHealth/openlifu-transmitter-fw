@@ -36,6 +36,11 @@ permissions:
 # would require re-keying and rebuilding the bootloader.
 # ---------------------------------------------------------------------------
 
+env:
+  # openlifu-sdk release that signs every image (LIFUCrypto). Keep it equal to
+  # clinical-build.yml's SDK_RELEASE; change it only in a reviewed PR.
+  SDK_RELEASE: "2.1.0"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -181,46 +186,30 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Bundling open-lifu-transmitter-bl @ $TAG (ref ${GITHUB_REF_NAME})"
 
-      # The signer is the SDK's LIFUCrypto — the single source of truth for the
-      # image format and the FwVersion encoding. Install the SDK from the
-      # build-type-appropriate published release (same rule as the bootloader):
-      #   pre-release build (rc tag or next branch) -> latest PRE-RELEASE
-      #     openlifu-sdk, but only if it is semver-newer than the latest stable
-      #     release; otherwise the latest stable release.
-      #   release build (release tag or main)       -> latest stable release.
-      # (The bootloader that verifies the image is bundled separately; the SDK
-      # only owns the signing format.)
+      # The signer is the SDK's LIFUCrypto: the single source of truth for the
+      # image format and the FwVersion encoding. It is pinned (SDK_RELEASE at the
+      # top of this file, the same release clinical-build.yml signs with), so an
+      # rc and its final release are signed by the same SDK. Bump it in a PR.
       - name: Resolve openlifu-sdk (signer) release
         id: sdk
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          REL=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
-                --json tagName,isPrerelease \
-                --jq 'map(select(.isPrerelease | not)) | .[0].tagName // empty')
-          PRE=$(gh release list --repo OpenwaterHealth/openlifu-sdk \
-                --json tagName,isPrerelease \
-                --jq 'map(select(.isPrerelease)) | .[0].tagName // empty')
-          TAG="$REL"
-          KIND="release"
-          if [[ "${GITHUB_REF_NAME}" == "next" || "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ ]]; then
-            # semver compare: '-rc.' -> '~rc.' makes sort -V rank a pre-release
-            # below its own stable release but above older ones.
-            if [ -n "$PRE" ] && { [ -z "$REL" ] || \
-                 [ "$(printf '%s\n' "${PRE/-rc./~rc.}" "$REL" | sort -V | tail -n1)" = "${PRE/-rc./~rc.}" ]; }; then
-              TAG="$PRE"
-              KIND="pre-release"
-            fi
-          fi
-          if [ -z "$TAG" ]; then
-            echo "::error::No openlifu-sdk release found to install." >&2
+          TAG="${SDK_RELEASE}"
+          PRE=$(gh release view "$TAG" --repo OpenwaterHealth/openlifu-sdk \
+                --json isPrerelease --jq .isPrerelease) \
+            || { echo "::error::could not read openlifu-sdk release ${TAG} (missing, or GitHub API error)." >&2; exit 1; }
+          KIND=$([ "$PRE" = "true" ] && echo pre-release || echo release)
+          # A final firmware release is never signed by a pre-release SDK.
+          if [[ "${GITHUB_REF}" == refs/tags/* && ! "${GITHUB_REF_NAME}" =~ -rc\.[0-9]+$ \
+                && "$KIND" == "pre-release" ]]; then
+            echo "::error::release ${GITHUB_REF_NAME} must be signed by an openlifu-sdk release, not ${TAG}." >&2
             exit 1
           fi
-          echo "SDK candidates: stable='${REL:-none}' pre-release='${PRE:-none}'"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "kind=$KIND" >> "$GITHUB_OUTPUT"
-          echo "Resolved openlifu-sdk $KIND @ $TAG (ref ${GITHUB_REF_NAME})"
+          echo "Pinned openlifu-sdk $KIND @ $TAG (ref ${GITHUB_REF_NAME})"
 
       - name: Install openlifu-sdk (signer)
         run: |
